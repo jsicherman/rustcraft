@@ -239,6 +239,7 @@ impl ApplicationHandler for App {
                     pitch_radians: orientation.pitch(),
                     index_count: total_indices,
                     entity_index_count: total_entity_meshes,
+                    entity_count: state.loaded_entities.entities.len() as u32,
                     frame_time_ms: dt.as_millis(),
                 };
 
@@ -305,9 +306,9 @@ impl AppState {
                 id.0,
                 voxels,
                 [
-                    (their_collider.0.half_width() * 2.0) as usize,
-                    their_collider.0.height() as usize,
-                    (their_collider.0.half_width() * 2.0) as usize,
+                    (their_collider.0.half_width() * 2.0).ceil() as usize,
+                    their_collider.0.height().ceil() as usize,
+                    (their_collider.0.half_width() * 2.0).ceil() as usize,
                 ],
                 corner_position.into(),
             );
