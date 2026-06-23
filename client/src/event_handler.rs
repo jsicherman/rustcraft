@@ -45,12 +45,9 @@ impl AppState {
         while let Some(msg) = self.client.receive_message(CHANNEL_ENTITIES) {
             let msg = ServerMessage::decode(&msg).unwrap();
 
-            tracing::debug!("received {:?}", msg);
-
             match msg {
                 ServerMessage::ChunkData(_) => unreachable!(),
                 ServerMessage::ClientSpawned(entity_id) => {
-                    tracing::debug!("server identified us as {:?}", entity_id);
                     self.local_player_network_id = Some(entity_id);
                 }
                 ServerMessage::EntityMove {
@@ -132,8 +129,6 @@ impl AppState {
                     entity_id,
                     position,
                 } => {
-                    tracing::debug!("spawning entity {:?} at {:?}", entity_id, position);
-
                     self.network_to_local.insert(
                         entity_id,
                         self.world

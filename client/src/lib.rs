@@ -158,8 +158,6 @@ impl ApplicationHandler for App {
                     position.x = 2.0;
                 }
 
-                tracing::debug!("cursor moved to {:?}", position);
-
                 if wrapped {
                     let _ = state.window.set_cursor_position(position);
                     state.camera.reset_cursor_position(position.x, position.y);
