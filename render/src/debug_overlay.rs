@@ -6,6 +6,7 @@ pub struct DebugOverlayData {
     pub pitch_radians: f32,
     pub index_count: u32,
     pub entity_index_count: u32,
+    pub entity_count: u32,
     pub frame_time_ms: u128,
 }
 
@@ -25,6 +26,7 @@ pub fn draw(ctx: &Context, data: &DebugOverlayData) {
             ));
             ui.label(format!("Indices {}", data.index_count));
             ui.label(format!("Entity Indices {}", data.entity_index_count));
+            ui.label(format!("Entity Count {}", data.entity_count));
             ui.label(format!("Frame {} ms", data.frame_time_ms));
         });
 }
