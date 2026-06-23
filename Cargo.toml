@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "crates/client",
-    "crates/common/block",
-    "crates/common/chunk",
-    "crates/common/spatial",
-    "crates/common/ecs",
-    "crates/common/protocol",
-    "crates/render",
-    "crates/server",
+    "client",
+    "common/block",
+    "common/chunk",
+    "common/spatial",
+    "common/ecs",
+    "common/protocol",
+    "render",
+    "server",
 ]
 resolver = "3"
 
