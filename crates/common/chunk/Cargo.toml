@@ -1,0 +1,13 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+description = "Chunk code"
+edition = "2024"
+name = "chunk"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+block = { path = "../block" }
+spatial = { path = "../spatial" }
+
+serde.workspace = true

@@ -1,0 +1,21 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+description = "Server code"
+edition = "2024"
+name = "server"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+block = { path = "../common/block" }
+chunk = { path = "../common/chunk" }
+ecs = { path = "../common/ecs" }
+protocol = { path = "../common/protocol" }
+spatial = { path = "../common/spatial" }
+
+anyhow.workspace = true
+bevy_ecs.workspace = true
+noise.workspace = true
+renet.workspace = true
+renet_netcode.workspace = true
+tracing.workspace = true

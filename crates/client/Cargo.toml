@@ -1,0 +1,38 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+description = "Client code"
+edition = "2024"
+name = "client"
+publish = false
+version = "0.1.0"
+
+[[bin]]
+name = "rustcraft"
+path = "src/bin/main.rs"
+
+[[bin]]
+name = "server_mode"
+path = "src/bin/server_mode.rs"
+
+[[bin]]
+name = "client_mode"
+path = "src/bin/client_mode.rs"
+
+[dependencies]
+block = { path = "../common/block" }
+chunk = { path = "../common/chunk" }
+ecs = { path = "../common/ecs" }
+protocol = { path = "../common/protocol" }
+render = { path = "../render" }
+server = { path = "../server" }
+spatial = { path = "../common/spatial" }
+
+pollster.workspace = true
+rand.workspace = true
+renet.workspace = true
+renet_netcode.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+winit.workspace = true

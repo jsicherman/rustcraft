@@ -1,0 +1,20 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+description = "Renderer code"
+edition = "2024"
+name = "render"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+anyhow.workspace = true
+bytemuck.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true
+image.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+
+block = { path = "../common/block" }

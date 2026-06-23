@@ -1,0 +1,52 @@
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    process::ExitCode,
+    time::{Duration, Instant},
+};
+
+use client::load_config;
+use server::{DefaultWorldGenerator, GameServer, WorldGenerator};
+
+fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
+    let config = load_config(None);
+    let port = config.server.port;
+
+    let public_addr_str = format!("{}:{}", config.server.address, port);
+    let Ok(public_addr) = public_addr_str.parse::<SocketAddr>() else {
+        eprintln!("Invalid public address in config: {public_addr_str}");
+        return ExitCode::FAILURE;
+    };
+
+    // Bind on all interfaces so remote clients can connect.
+    let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+
+    tracing::info!("Starting dedicated server on {bind_addr} (public: {public_addr})...");
+
+    let mut server = match GameServer::new(
+        bind_addr,
+        public_addr,
+        config.host.max_clients,
+        DefaultWorldGenerator::new(0),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to start server: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut last = Instant::now();
+    let hz = Duration::from_secs_f64(1.0 / config.host.tps as f64);
+    loop {
+        let now = Instant::now();
+        if let Err(e) = server.update(now - last) {
+            tracing::error!("Server error: {e}");
+        }
+        last = now;
+        std::thread::sleep(hz);
+    }
+}

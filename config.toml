@@ -1,0 +1,9 @@
+# Server to connect to
+[server]
+address = "127.0.0.1"
+port = 8080
+
+# Host configuration
+[host]
+tps = 60
+max_clients = 64

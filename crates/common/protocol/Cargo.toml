@@ -1,0 +1,18 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+description = "Protocol code"
+edition = "2024"
+name = "protocol"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+block = { path = "../block" }
+chunk = { path = "../chunk" }
+ecs = { path = "../ecs" }
+spatial = { path = "../spatial" }
+
+anyhow.workspace = true
+bincode.workspace = true
+serde.workspace = true
+zstd.workspace = true

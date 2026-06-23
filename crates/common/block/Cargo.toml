@@ -1,0 +1,10 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+description = "Block code"
+edition = "2024"
+name = "block"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+serde.workspace = true

@@ -1,0 +1,51 @@
+[workspace]
+members = [
+    "crates/client",
+    "crates/common/block",
+    "crates/common/chunk",
+    "crates/common/spatial",
+    "crates/common/ecs",
+    "crates/common/protocol",
+    "crates/render",
+    "crates/server",
+]
+resolver = "3"
+
+[profile.release]
+codegen-units = 1
+debug = "line-tables-only"
+lto = true
+strip = "debuginfo"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.test]
+opt-level = 3
+split-debuginfo = "unpacked"
+
+[workspace.dependencies]
+anyhow = "1.0"
+bevy_ecs = "0.19"
+egui = "0.34"
+egui-wgpu = "0.34"
+egui-winit = "0.34"
+bincode = { version = "2.0", features = ["serde"] }
+bytemuck = "1.25"
+image = "0.25"
+noise = "0.9"
+ordered-float = "5.3"
+pollster = "0.4"
+rand = "0.10"
+rayon = "1.12"
+redb = "4.1"
+renet = "2.0"
+renet_netcode = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+smallvec = "1.15"
+toml = "1.1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+wgpu = "29.0"
+winit = "0.30"
+zstd = "0.13"
