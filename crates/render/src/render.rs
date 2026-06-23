@@ -87,6 +87,11 @@ impl MeshCpu {
     pub fn index_count(&self) -> u32 {
         self.indices.len() as u32
     }
+
+    pub fn rotate_about(mut self, pivot: [f32; 3], yaw: f32, pitch: f32) -> Self {
+        rotate_cpu_mesh(&mut self, pivot, yaw, pitch);
+        self
+    }
 }
 
 impl<K: PartialEq + Send + Sync + 'static> MeshBuilder<K> {
@@ -555,6 +560,16 @@ impl Renderer {
             index_count: indices.len() as u32,
         }
     }
+
+    pub fn upload_cpu_mesh_rotated(
+        &self,
+        cpu_mesh: MeshCpu,
+        pivot: [f32; 3],
+        yaw: f32,
+        pitch: f32,
+    ) -> MeshGpu {
+        self.upload_cpu_mesh(cpu_mesh.rotate_about(pivot, yaw, pitch))
+    }
 }
 
 fn build_cpu_mesh(
@@ -566,6 +581,45 @@ fn build_cpu_mesh(
     let (vertices, indices) = build_mesh_geometry(voxels, size_xyz, offset, material_layers);
 
     MeshCpu { vertices, indices }
+}
+
+fn rotate_cpu_mesh(mesh: &mut MeshCpu, pivot: [f32; 3], yaw: f32, pitch: f32) {
+    for vertex in &mut mesh.vertices {
+        vertex.position = rotate_point(vertex.position, pivot, yaw, pitch);
+        vertex.normal = rotate_direction(vertex.normal, yaw, pitch);
+    }
+}
+
+fn rotate_point(point: [f32; 3], pivot: [f32; 3], yaw: f32, pitch: f32) -> [f32; 3] {
+    let relative = [
+        point[0] - pivot[0],
+        point[1] - pivot[1],
+        point[2] - pivot[2],
+    ];
+    let rotated = rotate_direction(relative, yaw, pitch);
+
+    [
+        rotated[0] + pivot[0],
+        rotated[1] + pivot[1],
+        rotated[2] + pivot[2],
+    ]
+}
+
+fn rotate_direction(vector: [f32; 3], yaw: f32, pitch: f32) -> [f32; 3] {
+    let (sin_pitch, cos_pitch) = pitch.sin_cos();
+    let pitch_rotated = [
+        vector[0],
+        vector[1] * cos_pitch + vector[2] * sin_pitch,
+        -vector[1] * sin_pitch + vector[2] * cos_pitch,
+    ];
+
+    let (sin_yaw, cos_yaw) = yaw.sin_cos();
+
+    [
+        pitch_rotated[0] * cos_yaw + pitch_rotated[2] * sin_yaw,
+        pitch_rotated[1],
+        -pitch_rotated[0] * sin_yaw + pitch_rotated[2] * cos_yaw,
+    ]
 }
 
 fn make_depth_texture(device: &Device, width: u32, height: u32) -> Texture {

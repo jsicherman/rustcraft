@@ -1,7 +1,7 @@
 use anyhow::Error;
 use bevy_ecs::{bundle::Bundle, world::EntityWorldMut};
 use block::BlockId;
-use chunk::{Chunk, ChunkMap};
+use chunk::{Chunk, ChunkMap, ChunkProvider};
 use ecs::{Entity, EntityPosition, World};
 use noise::{
     Fbm, Perlin,
@@ -111,6 +111,7 @@ pub trait WorldGenerator: Send + Sync {
     fn generate(&self, coordinate: Vec2iChunk) -> Chunk;
 }
 
+#[expect(unused)]
 pub struct FlatWorldGenerator(u32);
 
 impl WorldGenerator for FlatWorldGenerator {
@@ -252,7 +253,7 @@ impl WorldGenerator for DefaultWorldGenerator {
                             BlockId::Air
                         };
 
-                        slice.set([local_x as i32, local_y as i32, local_z as i32].into(), id);
+                        slice.set([local_x as i32, local_y, local_z as i32].into(), id);
                     }
                 }
             }

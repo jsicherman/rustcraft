@@ -1,6 +1,6 @@
 use anyhow::Error;
 use chunk::Chunk;
-use ecs::{CollisionStatus, EntityPosition, EntityVelocity, MovementIntent, Orientation};
+use ecs::{CollisionStatus, EntityOrientation, EntityPosition, EntityVelocity, MovementIntent};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub const PROTOCOL_ID: u64 = 0xABCDEF;
@@ -33,6 +33,7 @@ pub trait Packet: Serialize + DeserializeOwned {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
+    ClientSpawned(NetworkId),
     ChunkData(Box<Chunk>),
     EntitySpawn {
         entity_id: NetworkId,
@@ -47,14 +48,14 @@ pub enum ServerMessage {
     },
     EntityLook {
         entity_id: NetworkId,
-        orientation: Orientation,
+        orientation: EntityOrientation,
     },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum ClientMessage {
     Move(MovementIntent),
-    Look(Orientation),
+    Look(EntityOrientation),
 }
 
 impl Packet for ServerMessage {}

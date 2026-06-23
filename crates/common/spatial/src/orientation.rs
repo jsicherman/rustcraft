@@ -29,12 +29,12 @@ impl From<Direction> for Vec3fGlobal {
 impl From<Direction> for Vec3iGlobal {
     fn from(val: Direction) -> Self {
         match val {
-            Direction::PlusX => Vec3iGlobal::from((1, 0, 0)),
-            Direction::MinusX => Vec3iGlobal::from((-1, 0, 0)),
-            Direction::PlusY => Vec3iGlobal::from((0, 1, 0)),
-            Direction::MinusY => Vec3iGlobal::from((0, -1, 0)),
-            Direction::PlusZ => Vec3iGlobal::from((0, 0, 1)),
-            Direction::MinusZ => Vec3iGlobal::from((0, 0, -1)),
+            Direction::PlusX => Self::from((1, 0, 0)),
+            Direction::MinusX => Self::from((-1, 0, 0)),
+            Direction::PlusY => Self::from((0, 1, 0)),
+            Direction::MinusY => Self::from((0, -1, 0)),
+            Direction::PlusZ => Self::from((0, 0, 1)),
+            Direction::MinusZ => Self::from((0, 0, -1)),
         }
     }
 }
@@ -108,10 +108,16 @@ impl Orientation {
         dt: Duration,
         forward: f32,
         strafe: f32,
+        flying: bool,
     ) -> Vec3fGlobal {
         let (sin_yaw, cos_yaw) = self.yaw().sin_cos();
+        let (sin_pitch, cos_pitch) = if flying {
+            self.pitch().sin_cos()
+        } else {
+            (0.0, 1.0)
+        };
 
-        let fwd = Vec3fGlobal::from((sin_yaw, 0.0, cos_yaw));
+        let fwd = Vec3fGlobal::from((sin_yaw * cos_pitch, sin_pitch, cos_yaw * cos_pitch));
         let right = Vec3fGlobal::from((cos_yaw, 0.0, -sin_yaw));
 
         let mut direction = fwd * forward + right * strafe;
@@ -130,12 +136,19 @@ impl Orientation {
         Vec3fGlobal::from((yaw_sin * pitch_cos, pitch_sin, yaw_cos * pitch_cos))
     }
 
-    pub fn view_projection(&self, eye: Vec3fGlobal, aspect: f32) -> [Vec4f; 4] {
+    pub fn view_projection(
+        &self,
+        eye: Vec3fGlobal,
+        aspect: f32,
+        fov_y_deg: f32,
+        near: f32,
+        far: f32,
+    ) -> [Vec4f; 4] {
         let look_dir = self.look_direction();
         let center = eye + look_dir;
 
         let view = look_at(eye, center, Vec3f::UP);
-        let proj = perspective(aspect, 60.0, 0.1, 1000.0);
+        let proj = perspective(aspect, fov_y_deg, near, far);
         Vec4f::mat_mul(proj, view)
     }
 }

@@ -4,7 +4,7 @@ use anyhow::Error;
 use block::BlockRegistry;
 use chunk::ChunkMap;
 use ecs::{
-    Entity, EntityPosition, MovementIntent, Orientation, SimulatedEntityBundle,
+    Entity, EntityPosition, MovementIntent, EntityOrientation, SimulatedEntityBundle,
     movement::MoveBundle,
 };
 use protocol::{
@@ -59,6 +59,7 @@ impl<G: WorldGenerator> GameServer<G> {
         generator: G,
     ) -> Result<Self, Error> {
         let socket = UdpSocket::bind(bind_addr)?;
+
         let server_config = ServerConfig {
             current_time: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?,
             max_clients,
@@ -86,7 +87,10 @@ impl<G: WorldGenerator> GameServer<G> {
 
     pub fn update(&mut self, dt: Duration) -> Result<(), Error> {
         self.server.update(dt);
-        self.transport.update(dt, &mut self.server)?;
+
+        if let Err(e) = self.transport.update(dt, &mut self.server) {
+            anyhow::bail!("Transport update failed: {e}");
+        }
 
         self.process_events()?;
         self.receive_messages()?;
@@ -247,7 +251,7 @@ impl<G: WorldGenerator> GameServer<G> {
                     }
                     ClientMessage::Look(orientation) => {
                         let Some(mut current_orientation) =
-                            self.world.world_mut().get_mut::<Orientation>(*entity)
+                            self.world.world_mut().get_mut::<EntityOrientation>(*entity)
                         else {
                             continue;
                         };
@@ -270,13 +274,15 @@ impl<G: WorldGenerator> GameServer<G> {
                         }
                         .encode()?;
 
-                        for (observer_id, _) in
-                            self.client_states
-                                .player_positions
-                                .iter()
-                                .filter(|(_, chunk)| {
-                                    (**chunk - origin_chunk).length_sq() <= RENDER_DISTANCE_SQ
-                                })
+                        for (observer_id, _) in self
+                            .client_states
+                            .player_positions
+                            .iter()
+                            // don't replay the look message back to the client that sent it
+                            .filter(|(observer_id, _)| *observer_id != &client_id)
+                            .filter(|(_, chunk)| {
+                                (**chunk - origin_chunk).length_sq() <= RENDER_DISTANCE_SQ
+                            })
                         {
                             self.server
                                 .send_message(*observer_id, CHANNEL_ENTITIES, msg.clone());
@@ -297,6 +303,9 @@ impl<G: WorldGenerator> GameServer<G> {
         let Some(observer_entity) = self.entities.get(&client_id).copied() else {
             return Ok(());
         };
+
+        let msg = ServerMessage::ClientSpawned(NetworkId(client_id)).encode()?;
+        self.server.send_message(client_id, CHANNEL_ENTITIES, msg);
 
         let Some(observer_position) = self
             .world

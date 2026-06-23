@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use client::{App, load_config};
+use client::{App, settings::load_config};
 use server::{DefaultWorldGenerator, GameServer, WorldGenerator};
 use winit::event_loop::EventLoop;
 

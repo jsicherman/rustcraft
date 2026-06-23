@@ -19,6 +19,23 @@ impl Default for BoxCollider {
     }
 }
 
+impl BoxCollider {
+    pub fn new(height: f32, half_width: f32) -> Self {
+        Self { height, half_width }
+    }
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+    pub fn half_width(&self) -> f32 {
+        self.half_width
+    }
+
+    pub fn volume(&self) -> usize {
+        let width = self.half_width * 2.0;
+        (width * width * self.height).ceil() as usize
+    }
+}
+
 impl Aabb for BoxCollider {
     fn aabb<S: CoordSpace>(&self, position: Vec3f<S>) -> AxisAlignedBoundingBox<S> {
         let min = Vec3f::from([

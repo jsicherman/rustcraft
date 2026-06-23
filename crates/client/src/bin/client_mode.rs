@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, process::ExitCode};
 
-use client::{App, load_config};
+use client::{App, settings::load_config};
 use winit::event_loop::EventLoop;
 
 fn main() -> ExitCode {

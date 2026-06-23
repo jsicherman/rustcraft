@@ -6,18 +6,18 @@ use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 use spatial::{
     aabb::{Aabb, AxisAlignedBoundingBox},
-    orientation::Direction,
+    orientation::{Direction, Orientation},
     vectors::{Global, Vec3fGlobal},
 };
 
 use crate::{
-    BoxCollider, CollisionStatus, Entity, EntityPosition, EntityVelocity, MovementIntent,
-    Orientation, World,
+    BoxCollider, CollisionStatus, Entity, EntityOrientation, EntityPosition, EntityVelocity,
+    MovementIntent, World,
 };
 
 const MOVE_SPEED: f32 = 5.0;
-const JUMP_VELOCITY: f32 = 8.0;
-const GRAVITY: f32 = -9.8;
+const JUMP_VELOCITY: f32 = 6.3;
+const GRAVITY: f32 = -12.5;
 const TERMINAL_VELOCITY: f32 = -50.0;
 
 pub enum MoveBundle {
@@ -28,12 +28,12 @@ pub enum MoveBundle {
     },
     Orientation {
         position: EntityPosition,
-        orientation: Orientation,
+        orientation: EntityOrientation,
     },
     Full {
         position: EntityPosition,
         velocity: EntityVelocity,
-        orientation: Orientation,
+        orientation: EntityOrientation,
         collision: CollisionStatus,
     },
 }
@@ -47,7 +47,7 @@ impl MoveBundle {
         }
     }
 
-    pub fn orientation(&self) -> Option<Orientation> {
+    pub fn orientation(&self) -> Option<EntityOrientation> {
         match self {
             Self::Motion { .. } => None,
             Self::Orientation { orientation, .. } | Self::Full { orientation, .. } => {
@@ -87,14 +87,12 @@ pub fn apply_gravity(
 ) -> Vec3fGlobal {
     let is_grounded = collision_status == CollisionStatus::OnGround && velocity.y() <= 0.0;
 
-    if intent.jump() && is_grounded {
+    if intent.jump() && (is_grounded || intent.fly()) {
         velocity += [0.0, JUMP_VELOCITY, 0.0].into();
-    } else if !is_grounded {
+    } else if !is_grounded && !intent.fly() {
         velocity += [0.0, GRAVITY * dt.as_secs_f32(), 0.0].into();
         velocity.clamp((.., TERMINAL_VELOCITY.., ..));
-    } /* else {
-    velocity *= Vec3fGlobal::from([1.0, 0.0, 1.0]);
-    }*/
+    }
 
     velocity
 }
@@ -351,8 +349,8 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
 /// Resolves the movement of a single entity based on its `MovementIntent` and `Orientation`,
 /// and returns the new `EntityCoordinate`.
 pub fn apply_intent(
-    mut position: Vec3fGlobal,
-    orientation: spatial::orientation::Orientation,
+    position: Vec3fGlobal,
+    orientation: Orientation,
     intent: &MovementIntent,
     mut velocity: Vec3fGlobal,
     dt: Duration,
@@ -362,11 +360,20 @@ pub fn apply_intent(
         return (position, velocity);
     }
 
-    let movement_offset =
-        orientation.movement_offset(MOVE_SPEED, dt, intent.forward(), intent.strafe());
+    let movement_offset = orientation.movement_offset(
+        MOVE_SPEED,
+        dt,
+        intent.forward(),
+        intent.strafe(),
+        intent.fly(),
+    );
 
     velocity[0] = movement_offset.x() / dt_secs;
     velocity[2] = movement_offset.z() / dt_secs;
+
+    if intent.fly() {
+        velocity[1] = movement_offset.y() / dt_secs;
+    }
 
     (position, velocity)
 }
@@ -388,7 +395,7 @@ pub fn apply_intent_all(
         Entity,
         &mut EntityPosition,
         &mut EntityVelocity,
-        &Orientation,
+        &EntityOrientation,
         &MovementIntent,
         &BoxCollider,
         &mut CollisionStatus,
