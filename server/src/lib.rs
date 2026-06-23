@@ -4,7 +4,7 @@ use anyhow::Error;
 use block::BlockRegistry;
 use chunk::ChunkMap;
 use ecs::{
-    Entity, EntityPosition, MovementIntent, EntityOrientation, SimulatedEntityBundle,
+    Entity, EntityOrientation, EntityPosition, MovementIntent, SimulatedEntityBundle,
     movement::MoveBundle,
 };
 use protocol::{
