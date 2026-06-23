@@ -53,9 +53,7 @@ impl<G: WorldGenerator> GameWorld<G> {
         }
         .encode()?;
 
-        tracing::debug!("spawning entity {:?} at {:?}", entity_id, position);
         for observer in observers {
-            tracing::debug!("outbound to {observer}");
             server.send_message(observer, CHANNEL_ENTITIES, msg.clone());
         }
 

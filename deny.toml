@@ -1,0 +1,67 @@
+[graph]
+targets = []
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0436", # paste@1.0.15 is unmaintained
+    "RUSTSEC-2025-0141", # bincode@2.0.1 is unmaintained
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "NCSA",
+    "MIT",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.6
+exceptions = []
+
+[licenses.private]
+ignore = true
+registries = []
+
+[bans]
+multiple-versions = "deny"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
+deny = []
+
+skip = [
+    { crate = "rustc-hash", version = "1.1.0", reason = "brought in by wgpu@29.0.3" },
+]
+skip-tree = [
+    { crate = "rand", reason = "brought in by noise@0.9.0" },
+    { crate = "winit", reason = "lots of self-imposed multiples" },
+    { crate = "wgpu", reason = "lots of self-imposed multiples" },
+    { crate = "bevy_ecs", reason = "lots of self-imposed multiples" },
+]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
