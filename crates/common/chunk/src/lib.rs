@@ -259,6 +259,13 @@ pub trait ChunkProvider {
         &'a self,
         aabb: &'a AxisAlignedBoundingBox<Global>,
     ) -> Box<dyn Iterator<Item = Block<Global>> + 'a>;
+
+    fn chunk(&self, coordinate: Vec2iChunk) -> Option<&Chunk>;
+    fn chunk_mut(&mut self, coordinate: Vec2iChunk) -> Option<&mut Chunk>;
+    fn contains_chunk(&self, coordinate: Vec2iChunk) -> bool {
+        self.chunk(coordinate).is_some()
+    }
+    fn insert_chunk(&mut self, chunk: Chunk);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -315,27 +322,23 @@ impl ChunkProvider for ChunkMap {
                 }),
         )
     }
+
+    fn chunk(&self, coordinate: Vec2iChunk) -> Option<&Chunk> {
+        self.chunks.get(&coordinate)
+    }
+
+    fn chunk_mut(&mut self, coordinate: Vec2iChunk) -> Option<&mut Chunk> {
+        self.chunks.get_mut(&coordinate)
+    }
+
+    fn insert_chunk(&mut self, chunk: Chunk) {
+        self.chunks.insert(chunk.coordinate(), chunk);
+    }
 }
 
 impl ChunkMap {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn chunk(&self, coordinate: Vec2iChunk) -> Option<&Chunk> {
-        self.chunks.get(&coordinate)
-    }
-
-    pub fn chunk_mut(&mut self, coordinate: Vec2iChunk) -> Option<&mut Chunk> {
-        self.chunks.get_mut(&coordinate)
-    }
-
-    pub fn contains_chunk(&self, coordinate: Vec2iChunk) -> bool {
-        self.chunks.contains_key(&coordinate)
-    }
-
-    pub fn insert_chunk(&mut self, chunk: Chunk) {
-        self.chunks.insert(chunk.coordinate(), chunk);
     }
 
     pub fn neighboring_chunk(

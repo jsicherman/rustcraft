@@ -12,25 +12,19 @@ use wgpu::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialTextures(pub(crate) [u32; 6]);
 
+#[expect(unused)]
 pub struct TextureArray {
     texture: Texture,
     view: TextureView,
     sampler: Sampler,
-    layer_count: u32,
 }
 
 impl TextureArray {
-    pub fn texture(&self) -> &Texture {
-        &self.texture
-    }
     pub fn view(&self) -> &TextureView {
         &self.view
     }
     pub fn sampler(&self) -> &Sampler {
         &self.sampler
-    }
-    pub fn layer_count(&self) -> u32 {
-        self.layer_count
     }
 }
 
@@ -162,7 +156,6 @@ pub fn build_texture_array(
             texture,
             view,
             sampler,
-            layer_count,
         },
         materials,
     ))

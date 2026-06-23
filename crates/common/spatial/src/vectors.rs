@@ -692,7 +692,7 @@ impl<S: CoordSpace> Vec4f<S> {
         )
     }
 
-    /// Column-major 4×4 matrix multiply.
+    /// Column-major 4x4 matrix multiply.
     /// Each `[Vec4f; 4]` is an array of column vectors.
     pub fn mat_mul<S2: CoordSpace>(lhs: [Self; 4], rhs: [Vec4f<S2>; 4]) -> [Self; 4] {
         let mut out = [Self::ZERO; 4];

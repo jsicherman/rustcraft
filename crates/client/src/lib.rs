@@ -1,39 +1,35 @@
 pub mod camera;
+mod event_handler;
+mod key_handler;
+pub mod settings;
 pub mod world;
 
 use crate::{
     camera::Camera,
-    world::{ChunkCache, ClientChunk, ClientRenderable, EntityCache},
+    settings::AppConfig,
+    world::{ChunkCache, ClientRenderable, EntityCache},
 };
 use block::{BlockId, BlockRegistry};
 use chunk::Chunk;
-use ecs::{
-    BoxCollider, CollisionStatus, Entity, EntityPosition, EntityVelocity, LocalPlayer,
-    MovementIntent, Orientation, SimulatedEntityBundle, World,
-};
-use protocol::{
-    CHANNEL_CHUNKS, CHANNEL_ENTITIES, ClientMessage, NetworkId, PROTOCOL_ID, Packet,
-    RENDER_DISTANCE_SQ, ServerMessage,
-};
+use ecs::{BoxCollider, Entity, EntityOrientation, EntityPosition, MovementIntent, World};
+use protocol::{NetworkId, PROTOCOL_ID, RENDER_DISTANCE_SQ};
 use render::{DebugOverlayData, Renderer};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
-use serde::Deserialize;
 use spatial::vectors::{Global, IntoSpace, Vec2iChunk, Vec3fGlobal};
 use std::{
     collections::{HashMap, HashSet},
     net::{SocketAddr, UdpSocket},
-    path::Path,
     sync::Arc,
-    time::{Duration, Instant, SystemTime},
+    time::{Instant, SystemTime},
 };
 use winit::{
     application::ApplicationHandler,
-    dpi::PhysicalSize,
+    dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, KeyEvent, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, PhysicalKey},
-    window::{Window, WindowId},
+    window::{CursorGrabMode, Window, WindowId},
 };
 
 #[derive(Default)]
@@ -49,50 +45,6 @@ impl App {
             ..Default::default()
         }
     }
-}
-
-#[derive(Default, Deserialize)]
-pub struct AppConfig {
-    pub server: ServerConfig,
-    pub host: HostConfig,
-}
-
-#[derive(Deserialize)]
-pub struct ServerConfig {
-    pub address: String,
-    pub port: u16,
-}
-
-#[derive(Deserialize)]
-pub struct HostConfig {
-    pub tps: u64,
-    pub max_clients: usize,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            address: "127.0.0.1".to_string(),
-            port: 8080,
-        }
-    }
-}
-
-impl Default for HostConfig {
-    fn default() -> Self {
-        Self {
-            tps: 60,
-            max_clients: 64,
-        }
-    }
-}
-
-pub fn load_config(path: Option<&Path>) -> AppConfig {
-    let config_str = std::fs::read_to_string(path.unwrap_or(Path::new("config.toml")));
-    config_str
-        .ok()
-        .and_then(|s| toml::from_str(&s).ok())
-        .unwrap_or_default()
 }
 
 pub struct AppState {
@@ -111,13 +63,13 @@ pub struct AppState {
 
     camera: Camera,
     world: World,
-    player_entity: Entity,
+    local_player_network_id: Option<NetworkId>,
 
     network_to_local: HashMap<NetworkId, Entity>,
 
     pressed_keys: HashSet<KeyCode>,
     last_sent_intent: Option<MovementIntent>,
-    last_sent_orientation: Option<Orientation>,
+    last_sent_orientation: Option<EntityOrientation>,
 }
 
 impl ApplicationHandler for App {
@@ -135,7 +87,7 @@ impl ApplicationHandler for App {
         let renderer = pollster::block_on(render::init(Arc::clone(&window), &block_registry));
 
         let client = RenetClient::new(Default::default());
-        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
         let transport = NetcodeClientTransport::new(
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -153,11 +105,7 @@ impl ApplicationHandler for App {
         .unwrap();
 
         let camera = Camera::new();
-        let mut world = World::new();
-
-        let player_entity = world
-            .spawn((SimulatedEntityBundle::default(), LocalPlayer))
-            .id();
+        let world = World::new();
 
         self.state = Some(AppState {
             window,
@@ -165,7 +113,7 @@ impl ApplicationHandler for App {
             camera,
             client,
             transport,
-            player_entity,
+            local_player_network_id: None,
             world,
             block_registry,
             loaded_chunks: Default::default(),
@@ -181,10 +129,44 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(state) = &mut self.state else { return };
 
+        // state.window.set_cursor_visible(false);
+
         let event_consumed = state.renderer.handle_window_event(&state.window, &event);
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CursorEntered { .. } if !event_consumed => {
+                state
+                    .window
+                    .set_cursor_grab(CursorGrabMode::Confined)
+                    .unwrap();
+            }
+            WindowEvent::CursorLeft { .. } if !event_consumed => {
+                let _ = state.window.set_cursor_grab(CursorGrabMode::None);
+            }
+            WindowEvent::CursorMoved { mut position, .. } if !event_consumed => {
+                let size = state.window.inner_size();
+
+                let width = size.width as f64;
+
+                let mut wrapped = false;
+                if position.x < 1.0 {
+                    wrapped = true;
+                    position.x = width - 4.0;
+                } else if position.x > width - 3.0 {
+                    wrapped = true;
+                    position.x = 2.0;
+                }
+
+                tracing::debug!("cursor moved to {:?}", position);
+
+                if wrapped {
+                    let _ = state.window.set_cursor_position(position);
+                    state.camera.reset_cursor_position(position.x, position.y);
+                } else {
+                    state.camera.handle_cursor_moved(position.x, position.y);
+                }
+            }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -280,108 +262,18 @@ impl ApplicationHandler for App {
 }
 
 impl AppState {
-    fn process_inputs(
-        &mut self,
-        dt: Duration,
-    ) -> (
-        spatial::vectors::Vec3fGlobal,
-        spatial::orientation::Orientation,
-    ) {
-        let axis = |positive: KeyCode, negative: KeyCode| -> f32 {
-            (self.pressed_keys.contains(&positive) as u8 as f32)
-                - (self.pressed_keys.contains(&negative) as u8 as f32)
-        };
-
-        let forward = axis(KeyCode::KeyW, KeyCode::KeyS);
-        let right = axis(KeyCode::KeyA, KeyCode::KeyD);
-        let up = axis(KeyCode::Space, KeyCode::ShiftLeft);
-
-        let mut entity = self.world.entity_mut(self.player_entity);
-
-        let (
-            mut position,
-            mut velocity,
-            mut orientation,
-            mut intent,
-            collider,
-            mut collision_status,
-        ) = entity
-            .get_components_mut::<(
-                &mut EntityPosition,
-                &mut EntityVelocity,
-                &mut Orientation,
-                &mut MovementIntent,
-                &BoxCollider,
-                &mut CollisionStatus,
-            )>()
-            .unwrap();
-
-        let look_speed = 1.8 * dt.as_secs_f32();
-        orientation
-            .0
-            .yaw_pitch(
-                axis(KeyCode::ArrowLeft, KeyCode::ArrowRight) * look_speed,
-                axis(KeyCode::ArrowUp, KeyCode::ArrowDown) * look_speed,
-            )
-            .clamp(.., -1.5..1.5);
-
-        self.client.update(dt);
-        self.transport.update(dt, &mut self.client).ok();
-
-        let new_intent = MovementIntent::new(forward, right, up > 0.0, false, false);
-        if new_intent != *intent {
-            *intent = new_intent;
-        }
-
-        let should_sync_intent = self.last_sent_intent != Some(*intent);
-        let should_sync_orientation = self.last_sent_orientation != Some(*orientation);
-
-        if self.client.is_connected() {
-            if should_sync_intent {
-                let msg = ClientMessage::Move(*intent).encode().unwrap();
-                self.client.send_message(CHANNEL_CHUNKS, msg);
-            }
-
-            if should_sync_orientation {
-                let msg = ClientMessage::Look(*orientation).encode().unwrap();
-                self.client.send_message(CHANNEL_CHUNKS, msg);
-            }
-        }
-
-        if should_sync_intent {
-            self.last_sent_intent = Some(*intent);
-        }
-        if should_sync_orientation {
-            self.last_sent_orientation = Some(*orientation);
-        }
-
-        let new_velocity = ecs::movement::apply_gravity(velocity.0, &intent, *collision_status, dt);
-
-        let (new_position, new_velocity) =
-            ecs::movement::apply_intent(position.0, orientation.0, &intent, new_velocity, dt);
-
-        let (final_position, final_velocity, new_status) = ecs::movement::apply_collision_aabb(
-            new_position,
-            *collider,
-            *collision_status,
-            new_velocity,
-            &self.loaded_chunks,
-            &self.block_registry,
-            dt,
-        );
-
-        *position = EntityPosition(final_position);
-        *velocity = EntityVelocity(final_velocity);
-        *collision_status = new_status;
-
-        (position.0, orientation.0)
-    }
-
     fn request_entities(&mut self, my_position: Vec3fGlobal) {
         let my_chunk = Vec2iChunk::from(my_position);
 
         for (id, client_entity) in self.loaded_entities.entities.iter_mut() {
-            if client_entity.has_meshes() || client_entity.is_queued() {
+            // Don't render the local player
+            if Some(*id) == self.local_player_network_id {
+                continue;
+            }
+
+            if client_entity.is_queued()
+                || (client_entity.has_meshes() && !client_entity.is_dirty())
+            {
                 continue;
             }
 
@@ -389,7 +281,11 @@ impl AppState {
                 continue;
             };
 
-            let Some(their_position) = self.world.get::<EntityPosition>(*local) else {
+            let Ok((their_position, their_collider)) = self
+                .world
+                .entity(*local)
+                .get_components::<(&EntityPosition, &BoxCollider)>()
+            else {
                 continue;
             };
 
@@ -400,34 +296,43 @@ impl AppState {
 
             client_entity.queue_mesh();
 
-            let voxels = vec![BlockId::Missing as u32, BlockId::Missing as u32];
-            self.renderer
-                .entity_builder
-                .enqueue(id.0, voxels, [1, 2, 1], their_position.0.into());
+            let voxels = vec![BlockId::Missing as u32; their_collider.0.volume()];
+            let corner_position = their_position.0
+                - Vec3fGlobal::new(
+                    their_collider.0.half_width(),
+                    0.0,
+                    their_collider.0.half_width(),
+                );
+            self.renderer.entity_builder.enqueue(
+                id.0,
+                voxels,
+                [
+                    (their_collider.0.half_width() * 2.0) as usize,
+                    their_collider.0.height() as usize,
+                    (their_collider.0.half_width() * 2.0) as usize,
+                ],
+                corner_position.into(),
+            );
         }
 
         for result in self.renderer.entity_builder.collect_results() {
             let network_id = NetworkId(result.key);
 
-            tracing::debug!("received mesh for {network_id:?}");
-
             let Some(client_entity) = self.loaded_entities.entities.get_mut(&network_id) else {
                 continue;
             };
-
-            tracing::debug!("processing mesh for {network_id:?}");
 
             let Some(local) = self.network_to_local.get(&network_id) else {
                 continue;
             };
 
-            tracing::debug!("found local entity for {network_id:?}");
-
-            let Some(their_position) = self.world.get::<EntityPosition>(*local) else {
+            let Ok((their_position, their_orientation)) = self
+                .world
+                .entity(*local)
+                .get_components::<(&EntityPosition, &EntityOrientation)>()
+            else {
                 continue;
             };
-
-            tracing::debug!("found position for {network_id:?}: {:?}", their_position.0);
 
             let their_chunk = Vec2iChunk::from(their_position.0);
             if (their_chunk - my_chunk).length_sq() > RENDER_DISTANCE_SQ {
@@ -435,9 +340,16 @@ impl AppState {
                 continue;
             }
 
-            tracing::debug!("uploading mesh for {network_id:?}");
-
-            let gpu_mesh = self.renderer.upload_cpu_mesh(result.mesh);
+            let gpu_mesh = self.renderer.upload_cpu_mesh_rotated(
+                result.mesh,
+                [
+                    their_position.0.x(),
+                    their_position.0.y(),
+                    their_position.0.z(),
+                ],
+                their_orientation.0.yaw(),
+                their_orientation.0.pitch(),
+            );
             client_entity.provide_mesh(gpu_mesh);
         }
     }
@@ -478,134 +390,6 @@ impl AppState {
 
             let gpu_mesh = self.renderer.upload_cpu_mesh(result.mesh);
             client_chunk.provide_mesh(gpu_mesh);
-        }
-    }
-
-    fn receive_chunks(&mut self, chunk_position: Vec2iChunk) {
-        self.loaded_chunks
-            .chunks
-            .retain(|coord, _| (*coord - chunk_position).length_sq() <= RENDER_DISTANCE_SQ);
-
-        while let Some(msg) = self.client.receive_message(CHANNEL_CHUNKS) {
-            let msg = ServerMessage::decode(&msg).unwrap();
-
-            match msg {
-                ServerMessage::ChunkData(chunk) => {
-                    let coordinate = chunk.coordinate();
-
-                    if (coordinate - chunk_position).length_sq() > RENDER_DISTANCE_SQ {
-                        continue;
-                    }
-
-                    self.loaded_chunks
-                        .chunks
-                        .insert(coordinate, ClientChunk::new(*chunk));
-                }
-                ServerMessage::EntityMove { .. }
-                | ServerMessage::EntityLook { .. }
-                | ServerMessage::EntitySpawn { .. }
-                | ServerMessage::EntityDespawn(_) => {
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    fn receive_entities(&mut self, _chunk_position: Vec2iChunk) {
-        while let Some(msg) = self.client.receive_message(CHANNEL_ENTITIES) {
-            let msg = ServerMessage::decode(&msg).unwrap();
-
-            match msg {
-                ServerMessage::ChunkData(_) => unreachable!(),
-                ServerMessage::EntityMove {
-                    entity_id,
-                    position,
-                    velocity,
-                    collision_status,
-                } => {
-                    let Some(entity) = self.network_to_local.get(&entity_id) else {
-                        continue;
-                    };
-
-                    let Ok(mut entity) = self.world.get_entity_mut(*entity) else {
-                        continue;
-                    };
-
-                    let Ok((mut client_position, mut client_velocity, mut client_collision_status)) =
-                        entity.get_components_mut::<(
-                            &mut EntityPosition,
-                            &mut EntityVelocity,
-                            &mut CollisionStatus,
-                        )>()
-                    else {
-                        continue;
-                    };
-
-                    /*tracing::debug!(
-                        "dP: {:.3?} {}",
-                        position.0 - client_position.0,
-                        *client_collision_status == collision_status
-                    );
-                    tracing::debug!("dV: {:.3?}", velocity.0 - client_velocity.0);*/
-
-                    let position_changed = *client_position != position;
-
-                    *client_position = position;
-                    *client_velocity = velocity;
-                    *client_collision_status = collision_status;
-
-                    // Entity meshes are baked with world-space offsets, so they must be
-                    // rebuilt when the entity position changes.
-                    // FIXME: check this
-                    if position_changed
-                        && let Some(client_entity) =
-                            self.loaded_entities.entities.get_mut(&entity_id)
-                    {
-                        *client_entity = Default::default();
-                    }
-                }
-                ServerMessage::EntityLook {
-                    entity_id,
-                    orientation,
-                } => {
-                    let Some(entity) = self.network_to_local.get(&entity_id) else {
-                        continue;
-                    };
-
-                    let Ok(mut entity) = self.world.get_entity_mut(*entity) else {
-                        continue;
-                    };
-
-                    if let Some(mut client_orientation) = entity.get_mut::<Orientation>() {
-                        *client_orientation = orientation;
-                    }
-                }
-                ServerMessage::EntitySpawn {
-                    entity_id,
-                    position,
-                } => {
-                    // FIXME: double spawn for client (here and reload)?
-                    tracing::debug!("spawning entity {:?} at {:?}", entity_id, position);
-
-                    self.network_to_local.insert(
-                        entity_id,
-                        self.world
-                            .spawn(SimulatedEntityBundle {
-                                position,
-                                ..Default::default()
-                            })
-                            .id(),
-                    );
-                    self.loaded_entities
-                        .entities
-                        .insert(entity_id, Default::default());
-                }
-                ServerMessage::EntityDespawn(entity_id) => {
-                    if let Some(entity) = self.network_to_local.remove(&entity_id) {
-                        self.world.despawn(entity);
-                    }
-                }
-            }
         }
     }
 }

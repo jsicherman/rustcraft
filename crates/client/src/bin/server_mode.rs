@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use client::load_config;
+use client::settings::load_config;
 use server::{DefaultWorldGenerator, GameServer, WorldGenerator};
 
 fn main() -> ExitCode {
@@ -21,7 +21,6 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    // Bind on all interfaces so remote clients can connect.
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
 
     tracing::info!("Starting dedicated server on {bind_addr} (public: {public_addr})...");
