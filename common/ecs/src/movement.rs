@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use block::BlockRegistry;
+use block::TexturePack;
 use chunk::{ChunkMap, ChunkProvider};
 use smallvec::SmallVec;
 use spatial::{
@@ -258,7 +258,7 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
     previous_status: CollisionStatus,
     velocity: Vec3fGlobal,
     chunks: &CP,
-    block_registry: &BlockRegistry,
+    texture_pack: &TexturePack,
     dt: Duration,
 ) -> (Vec3fGlobal, Vec3fGlobal, CollisionStatus) {
     const MAX_COLLISION_ITERATIONS: usize = 2;
@@ -288,7 +288,7 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
         let mut collisions = SmallVec::<[CollisionEvent; 3]>::new();
 
         for candidate in chunks.intersecting(&aabb_swept) {
-            if !block_registry
+            if !texture_pack
                 .get_block_type(candidate.id())
                 .solidity()
                 .is_solid()
@@ -417,7 +417,7 @@ pub fn apply_intent_all(
     world: &mut World,
     stack: &mut HashMap<Entity, MoveBundle>,
     chunk_map: &ChunkMap,
-    block_registry: &BlockRegistry,
+    texture_pack: &TexturePack,
     dt: Duration,
 ) {
     const BROADCAST_POS_TOLERANCE_SQ: f32 = 1e-2 * 1e-2;
@@ -448,7 +448,7 @@ pub fn apply_intent_all(
             *collision_status,
             new_velocity,
             chunk_map,
-            block_registry,
+            texture_pack,
             dt,
         );
 

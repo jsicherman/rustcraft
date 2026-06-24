@@ -15,4 +15,5 @@ spatial = { path = "../spatial" }
 anyhow.workspace = true
 bincode.workspace = true
 serde.workspace = true
+tracing.workspace = true
 zstd.workspace = true

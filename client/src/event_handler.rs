@@ -5,25 +5,30 @@ use protocol::{CHANNEL_CHUNKS, CHANNEL_ENTITIES, Packet, RENDER_DISTANCE_SQ, Ser
 use render::model::RenderHandle;
 use spatial::vectors::{Vec2iChunk, Vec3fGlobal};
 
-use crate::{AppState, chunk::ClientChunk, renderer::NetworkRenderable};
+use crate::{AppState, renderer::NetworkRenderable};
 
 impl AppState {
     pub(crate) fn receive_chunk_messages(&mut self, chunk_position: Vec2iChunk) {
-        self.chunk_state.chunks.retain(|coord, chunk| {
+        let mut meshes_to_remove = Vec::new();
+
+        self.chunk_state.retain_chunks(|coord, chunk| {
             let retained = (*coord - chunk_position).length_sq() <= RENDER_DISTANCE_SQ;
 
             if !retained && let Some(instance) = chunk.instance() {
                 let RenderHandle::Mesh(mesh) = instance.handle() else {
                     unreachable!();
                 };
-
-                // chunks are only singly-referenced, so drop the mesh when the chunk is unloaded
-                tracing::debug!("dropping mesh {mesh:?} for chunk {coord:?}");
-                self.renderer.remove_mesh(&mesh);
+                meshes_to_remove.push((*coord, mesh));
             }
 
             retained
         });
+
+        for (coord, mesh) in meshes_to_remove {
+            // chunks are only singly-referenced, so drop the mesh when the chunk is unloaded
+            tracing::debug!("dropping mesh {mesh:?} for chunk {coord:?}");
+            self.renderer.remove_mesh(&mesh);
+        }
 
         while let Some(msg) = self.client.receive_message(CHANNEL_CHUNKS) {
             let msg = ServerMessage::decode(&msg).unwrap();
@@ -36,9 +41,7 @@ impl AppState {
                         continue;
                     }
 
-                    self.chunk_state
-                        .chunks
-                        .insert(coordinate, ClientChunk::new(*chunk));
+                    self.chunk_state.insert_or_replace(*chunk);
                 }
                 ServerMessage::EntityMove { .. }
                 | ServerMessage::EntityLook { .. }
@@ -141,9 +144,9 @@ impl AppState {
                         }
                     }
 
-                    *client_position = position;
-                    *client_velocity = velocity;
-                    *client_collision_status = collision_status;
+                    //*client_position = position;
+                    //*client_velocity = velocity;
+                    //*client_collision_status = collision_status;
 
                     self.request_entity_frame(*entity_id, current_position);
                 }

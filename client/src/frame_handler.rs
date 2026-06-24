@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use chunk::Chunk;
+use chunk::{Chunk, ChunkProvider};
 use ecs::{Entity, EntityModel, EntityOrientation, EntityPosition};
 use protocol::RENDER_DISTANCE_SQ;
 use render::{
@@ -102,18 +102,36 @@ impl AppState {
 
     pub fn request_chunk_frames(&mut self, current_chunk_position: Vec2iChunk) {
         let mut num_queued = 0;
-        for (coordinate, client_chunk) in self.chunk_state.chunks.iter_mut() {
-            if client_chunk.has_instance() || client_chunk.is_queued() {
-                continue;
-            }
 
-            if (*coordinate - current_chunk_position).length_sq() > RENDER_DISTANCE_SQ {
+        let voxels: Vec<_> = self
+            .chunk_state
+            .chunks
+            .iter()
+            .map(|(coordinate, client_chunk)| {
+                if client_chunk.has_instance() || client_chunk.is_queued() {
+                    return Default::default();
+                }
+
+                if (*coordinate - current_chunk_position).length_sq() > RENDER_DISTANCE_SQ {
+                    return Default::default();
+                }
+
+                Some(
+                    client_chunk
+                        .iter(self.chunk_state.store())
+                        .map(|b| b as u32)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+
+        for ((coordinate, client_chunk), voxels) in self.chunk_state.chunks.iter_mut().zip(voxels) {
+            let Some(voxels) = voxels else {
                 continue;
-            }
+            };
 
             num_queued += 1;
 
-            let voxels: Vec<_> = client_chunk.iter().map(|b| b as u32).collect();
             self.renderer.chunk_builder.enqueue(
                 (coordinate.x(), coordinate.z()),
                 voxels,

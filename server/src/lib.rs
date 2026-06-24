@@ -1,7 +1,7 @@
 mod world;
 
 use anyhow::Error;
-use block::BlockRegistry;
+use block::TexturePack;
 use chunk::ChunkMap;
 use ecs::{
     BoxCollider, Entity, EntityModel, EntityOrientation, EntityPosition, MovementIntent,
@@ -30,7 +30,7 @@ pub struct GameServer<G: WorldGenerator> {
     transport: NetcodeServerTransport,
     world: GameWorld<G>,
     chunks: ChunkMap,
-    block_registry: BlockRegistry,
+    texture_pack: TexturePack,
     entities: HashMap<NetworkId, Entity>,
     entities_inverted: HashMap<Entity, NetworkId>,
     client_states: ClientStates,
@@ -77,7 +77,7 @@ impl<G: WorldGenerator> GameServer<G> {
             transport,
             world: GameWorld::new(generator),
             chunks: ChunkMap::new(),
-            block_registry: BlockRegistry::load(),
+            texture_pack: TexturePack::load(),
             client_states: Default::default(),
             entities: Default::default(),
             entities_inverted: Default::default(),
@@ -100,7 +100,7 @@ impl<G: WorldGenerator> GameServer<G> {
             self.world.world_mut(),
             &mut self.stacks.movement,
             &self.chunks,
-            &self.block_registry,
+            &self.texture_pack,
             dt,
         );
         self.emit_entities();

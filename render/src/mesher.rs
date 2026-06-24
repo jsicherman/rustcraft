@@ -252,7 +252,9 @@ fn build_mask(
             pos[u_axis] = u;
             pos[v_axis] = v;
 
-            let voxel = voxels[voxel_idx(pos[0], pos[1], pos[2], size)];
+            let Some(&voxel) = voxels.get(voxel_idx(pos[0], pos[1], pos[2], size)) else {
+                continue;
+            };
 
             if voxel == 0 {
                 continue;
@@ -361,5 +363,9 @@ fn is_face_exposed(
         return true;
     }
 
-    voxels[voxel_idx(nx as usize, ny as usize, nz as usize, size)] == 0
+    voxels
+        .get(voxel_idx(nx as usize, ny as usize, nz as usize, size))
+        .copied()
+        .unwrap_or(0)
+        == 0
 }

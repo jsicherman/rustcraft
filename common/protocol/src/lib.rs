@@ -26,8 +26,12 @@ impl Deref for NetworkId {
     }
 }
 
-pub trait Packet: Serialize + DeserializeOwned {
+pub trait Packet: Serialize + DeserializeOwned + std::fmt::Debug {
     fn encode(self) -> Result<Vec<u8>, Error> {
+        tracing::debug!(
+            "Encoding packet: {:?} {self:?}",
+            std::any::type_name::<Self>()
+        );
         let serialized = bincode::serde::encode_to_vec(self, bincode::config::standard())?;
         let compressed = zstd::encode_all(serialized.as_slice(), 0)?;
 

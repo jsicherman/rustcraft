@@ -1,7 +1,7 @@
 use anyhow::Error;
 use bevy_ecs::{bundle::Bundle, world::EntityWorldMut};
 use block::BlockId;
-use chunk::{Chunk, ChunkMap, ChunkProvider};
+use chunk::{Chunk, ChunkMap, ChunkProvider, ChunkStore};
 use ecs::{BoxCollider, Entity, EntityModel, EntityPosition, World};
 use noise::{
     Fbm, Perlin,
@@ -95,7 +95,7 @@ impl<G: WorldGenerator> GameWorld<G> {
         coordinate: Vec2iChunk,
     ) -> &'a Chunk {
         if !chunk_map.contains_chunk(coordinate) {
-            let chunk = self.generator.generate(coordinate);
+            let chunk = self.generator.generate(chunk_map.store_mut(), coordinate);
             chunk_map.insert_chunk(chunk);
         }
         chunk_map.chunk(coordinate).unwrap()
@@ -117,7 +117,7 @@ impl<G: WorldGenerator> GameWorld<G> {
 pub trait WorldGenerator: Send + Sync {
     fn new(seed: u32) -> Self;
     fn seed(&self) -> u32;
-    fn generate(&self, coordinate: Vec2iChunk) -> Chunk;
+    fn generate(&self, chunk_store: &mut ChunkStore, coordinate: Vec2iChunk) -> Chunk;
 }
 
 #[expect(unused)]
@@ -132,7 +132,7 @@ impl WorldGenerator for FlatWorldGenerator {
         self.0
     }
 
-    fn generate(&self, coordinate: Vec2iChunk) -> Chunk {
+    fn generate(&self, chunk_store: &mut ChunkStore, coordinate: Vec2iChunk) -> Chunk {
         let mut chunk = Chunk::new(coordinate);
 
         for slice_idx in 0..(WORLD_HEIGHT / Chunk::CHUNK_SIZE) {
@@ -140,32 +140,31 @@ impl WorldGenerator for FlatWorldGenerator {
             let slice_y_end = slice_y_start + Chunk::CHUNK_SIZE as i32 - 1;
 
             if slice_y_end < SEA_LEVEL as i32 - 3 {
-                chunk.fill(slice_idx, BlockId::Stone);
+                chunk.fill_direct(chunk_store, slice_idx, BlockId::Stone);
             } else if slice_y_start > SEA_LEVEL as i32 {
-                chunk.fill(slice_idx, BlockId::Air);
+                chunk.fill_direct(chunk_store, slice_idx, BlockId::Air);
             } else {
-                let slice = chunk.slice_mut(slice_idx);
-                slice.promote(BlockId::Air);
+                chunk.slice_mut(chunk_store, slice_idx, |slice| {
+                    slice.set_many((0..Chunk::CHUNK_SIZE).flat_map(|local_x| {
+                        (0..Chunk::CHUNK_SIZE).flat_map(move |local_z| {
+                            (0..Chunk::CHUNK_SIZE).map(move |local_y| {
+                                let world_y = slice_y_start + local_y as i32;
 
-                for local_x in 0..Chunk::CHUNK_SIZE {
-                    for local_z in 0..Chunk::CHUNK_SIZE {
-                        for local_y in 0..Chunk::CHUNK_SIZE {
-                            let world_y = slice_y_start + local_y as i32;
+                                let id = if world_y <= SEA_LEVEL as i32 - 3 {
+                                    BlockId::Stone
+                                } else if world_y < SEA_LEVEL as i32 {
+                                    BlockId::Dirt
+                                } else if world_y == SEA_LEVEL as i32 {
+                                    BlockId::Grass
+                                } else {
+                                    BlockId::Air
+                                };
 
-                            let id = if world_y <= SEA_LEVEL as i32 - 3 {
-                                BlockId::Stone
-                            } else if world_y < SEA_LEVEL as i32 {
-                                BlockId::Dirt
-                            } else if world_y == SEA_LEVEL as i32 {
-                                BlockId::Grass
-                            } else {
-                                BlockId::Air
-                            };
-
-                            slice.set([local_x as i32, local_y as i32, local_z as i32].into(), id);
-                        }
-                    }
-                }
+                                ([local_x as i32, local_y as i32, local_z as i32].into(), id)
+                            })
+                        })
+                    }));
+                });
             }
         }
 
@@ -190,7 +189,7 @@ impl WorldGenerator for DefaultWorldGenerator {
         self.seed
     }
 
-    fn generate(&self, coordinate: Vec2iChunk) -> Chunk {
+    fn generate(&self, chunk_store: &mut ChunkStore, coordinate: Vec2iChunk) -> Chunk {
         const N_SLICES: usize = WORLD_HEIGHT / Chunk::CHUNK_SIZE;
 
         let aabb = coordinate.aabb(Vec3fGlobal::ZERO);
@@ -234,7 +233,7 @@ impl WorldGenerator for DefaultWorldGenerator {
             let slice_y_end = slice_y_start + Chunk::CHUNK_SIZE as i32 - 1;
 
             if slice_y_end < min_surface - 3 {
-                chunk.fill(slice_idx, BlockId::Stone);
+                chunk.fill_direct(chunk_store, slice_idx, BlockId::Stone);
                 continue;
             }
 
@@ -242,30 +241,30 @@ impl WorldGenerator for DefaultWorldGenerator {
                 continue;
             }
 
-            let slice = chunk.slice_mut(slice_idx);
-            slice.promote(BlockId::Air);
+            chunk.slice_mut(chunk_store, slice_idx, |slice| {
+                slice.set_many((0..Chunk::CHUNK_SIZE).flat_map(|local_x| {
+                    (0..Chunk::CHUNK_SIZE).flat_map(move |local_z| {
+                        let surface_y = surface_heights[local_x][local_z];
+                        let stone_end = (surface_y - 3).max(0);
 
-            for (local_x, values) in surface_heights.iter().enumerate().take(Chunk::CHUNK_SIZE) {
-                for (local_z, &surface_y) in values.iter().enumerate().take(Chunk::CHUNK_SIZE) {
-                    let stone_end = (surface_y - 3).max(0);
+                        (0..Chunk::CHUNK_SIZE as i32).map(move |local_y| {
+                            let world_y = slice_y_start + local_y;
 
-                    for local_y in 0..Chunk::CHUNK_SIZE as i32 {
-                        let world_y = slice_y_start + local_y;
+                            let id = if world_y <= stone_end {
+                                BlockId::Stone
+                            } else if world_y < surface_y {
+                                BlockId::Dirt
+                            } else if world_y == surface_y {
+                                BlockId::Grass
+                            } else {
+                                BlockId::Air
+                            };
 
-                        let id = if world_y <= stone_end {
-                            BlockId::Stone
-                        } else if world_y < surface_y {
-                            BlockId::Dirt
-                        } else if world_y == surface_y {
-                            BlockId::Grass
-                        } else {
-                            BlockId::Air
-                        };
-
-                        slice.set([local_x as i32, local_y, local_z as i32].into(), id);
-                    }
-                }
-            }
+                            ([local_x as i32, local_y, local_z as i32].into(), id)
+                        })
+                    })
+                }));
+            });
         }
 
         chunk

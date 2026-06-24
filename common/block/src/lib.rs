@@ -16,17 +16,30 @@ impl BlockId {
     pub const MAX: usize = 4;
 }
 
+impl TryFrom<u16> for BlockId {
+    type Error = ();
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(BlockId::Air),
+            1 => Ok(BlockId::Stone),
+            2 => Ok(BlockId::Grass),
+            3 => Ok(BlockId::Dirt),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum TextureId {
-    Missing = BlockId::MAX as u8,
-    Head = BlockId::MAX as u8 + 1,
-    LightPart = BlockId::MAX as u8 + 2,
-    DarkPart = BlockId::MAX as u8 + 3,
+    Head = BlockId::MAX as u8,
+    LightPart = BlockId::MAX as u8 + 1,
+    DarkPart = BlockId::MAX as u8 + 2,
 }
 
 impl TextureId {
-    pub const MAX: usize = 4;
+    pub const MAX: usize = 3;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,13 +119,12 @@ impl BlockSolidity {
     }
 }
 
-// FIXME: clean up
-pub struct BlockRegistry {
+pub struct TexturePack {
     blocks: Vec<BlockType>,
     textures: Vec<BlockTexture>,
 }
 
-impl BlockRegistry {
+impl TexturePack {
     pub fn load() -> Self {
         let blocks = vec![
             BlockType {
@@ -159,7 +171,6 @@ impl BlockRegistry {
         assert_eq!(blocks.len(), BlockId::MAX);
 
         let textures = vec![
-            BlockTexture::Uniform(Path::new("textures/missing.png")),
             BlockTexture::directional(
                 Path::new("textures/dirt.png"),
                 Path::new("textures/steve_shirt.png"),

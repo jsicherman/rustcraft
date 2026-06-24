@@ -8,7 +8,7 @@ pub mod settings;
 pub mod world;
 
 use crate::{camera::Camera, renderer::RenderState, settings::AppConfig, world::ChunkCache};
-use block::BlockRegistry;
+use block::TexturePack;
 use ecs::{Entity, EntityOrientation, MovementIntent, World};
 use entity::EntityType;
 use model::ModelDefinition;
@@ -57,7 +57,7 @@ pub struct AppState {
 
     last_update: Instant,
 
-    block_registry: BlockRegistry,
+    texture_pack: TexturePack,
 
     chunk_state: ChunkCache,
     entity_state: RenderState,
@@ -90,15 +90,15 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
-        let block_registry = BlockRegistry::load();
+        let texture_pack = TexturePack::load();
 
-        let mut renderer = pollster::block_on(render::init(Arc::clone(&window), &block_registry));
+        let mut renderer = pollster::block_on(render::init(Arc::clone(&window), &texture_pack));
 
         let cube_mesh = renderer.cube();
         for definition in ModelDefinition::iter() {
             renderer.insert_model(
                 definition.handle(),
-                definition.build(cube_mesh, block_registry.get_textures(EntityType::Human)),
+                definition.build(cube_mesh, texture_pack.get_textures(EntityType::Human)),
             );
         }
 
@@ -131,7 +131,7 @@ impl ApplicationHandler for App {
             transport,
             local_player: None,
             world,
-            block_registry,
+            texture_pack,
             chunk_state: Default::default(),
             entity_state: Default::default(),
             network_to_local: Default::default(),
@@ -207,6 +207,8 @@ impl ApplicationHandler for App {
                 let (position, orientation) = state.process_inputs(dt);
                 let chunk_position = Vec2iChunk::from(position);
 
+                state.transport.send_packets(&mut state.client).ok();
+
                 state.receive_chunk_messages(chunk_position);
                 state.receive_entity_messages(position);
 
@@ -216,7 +218,6 @@ impl ApplicationHandler for App {
 
                 state.render_frame(position, orientation, dt);
 
-                state.transport.send_packets(&mut state.client).ok();
                 state.window.request_redraw();
             }
             WindowEvent::Resized(size) => {

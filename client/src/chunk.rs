@@ -1,5 +1,5 @@
 use block::BlockId;
-use chunk::Chunk;
+use chunk::{Chunk, ChunkStore};
 use render::model::RenderInstance;
 
 pub struct ClientChunk {
@@ -17,8 +17,8 @@ impl ClientChunk {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = BlockId> + '_ {
-        self.chunk.iter()
+    pub fn iter<'a>(&'a self, store: &'a ChunkStore) -> impl Iterator<Item = BlockId> + 'a {
+        self.chunk.iter(store)
     }
 
     pub fn chunk(&self) -> &Chunk {

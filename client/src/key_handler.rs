@@ -103,7 +103,7 @@ impl AppState {
             *collision_status,
             new_velocity,
             &self.chunk_state,
-            &self.block_registry,
+            &self.texture_pack,
             dt,
         );
 

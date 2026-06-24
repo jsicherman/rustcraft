@@ -1,6 +1,6 @@
 use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
-use block::BlockRegistry;
+use block::TexturePack;
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use egui::{Context, ViewportId};
 use egui_wgpu::ScreenDescriptor;
@@ -114,7 +114,7 @@ impl Vertex {
     }
 }
 
-pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Renderer {
+pub async fn init(window: Arc<Window>, texture_pack: &TexturePack) -> Renderer {
     let size = window.inner_size();
 
     let instance = Instance::default();
@@ -295,7 +295,7 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
         cache: None,
     });
 
-    let (textures, materials) = build_texture_array(&device, &queue, block_registry).unwrap();
+    let (textures, materials) = build_texture_array(&device, &queue, texture_pack).unwrap();
 
     let texture_bind_group = device.create_bind_group(&BindGroupDescriptor {
         label: Some("texture array bind group"),
