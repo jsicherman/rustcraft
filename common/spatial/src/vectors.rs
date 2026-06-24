@@ -145,7 +145,7 @@ macro_rules! define_vec {
 
         impl<S: CoordSpace> $name<S> {
             #[inline]
-            pub fn new($($field: $scalar),+) -> Self {
+            pub const fn new($($field: $scalar),+) -> Self {
                 Self { $($field,)+ _space: std::marker::PhantomData }
             }
 
@@ -816,6 +816,42 @@ pub type Vec3iChunk = Vec3i<Chunk>;
 
 pub type Vec2fGlobal = Vec2f<Global>;
 pub type Vec3fGlobal = Vec3f<Global>;
+
+pub const VEC4F_IDENTITY: [Vec4f<Global>; 4] = [
+    Vec4f::new(1.0, 0.0, 0.0, 0.0),
+    Vec4f::new(0.0, 1.0, 0.0, 0.0),
+    Vec4f::new(0.0, 0.0, 1.0, 0.0),
+    Vec4f::new(0.0, 0.0, 0.0, 1.0),
+];
+
+pub const VEC3F_IDENTITY: [Vec3f<Global>; 3] = [
+    Vec3f::new(1.0, 0.0, 0.0),
+    Vec3f::new(0.0, 1.0, 0.0),
+    Vec3f::new(0.0, 0.0, 1.0),
+];
+
+impl<S: CoordSpace> Vec3f<S> {
+    pub fn translation_matrix(self) -> [Vec4f<S>; 4] {
+        [
+            Vec4f::new(1.0, 0.0, 0.0, 0.0),
+            Vec4f::new(0.0, 1.0, 0.0, 0.0),
+            Vec4f::new(0.0, 0.0, 1.0, 0.0),
+            Vec4f::new(self.x(), self.y(), self.z(), 1.0),
+        ]
+    }
+}
+
+impl Vec2iChunk {
+    pub fn translation_matrix(self) -> [Vec4f<Chunk>; 4] {
+        let chunk_size = CHUNK_SIZE as f32;
+        Vec3f::<Chunk>::new(
+            self.x() as f32 * chunk_size,
+            0.0,
+            self.z() as f32 * chunk_size,
+        )
+        .translation_matrix()
+    }
+}
 
 impl<S: CoordSpace> From<Vec3f<S>> for Vec2iChunk
 where

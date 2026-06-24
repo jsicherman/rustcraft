@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use anyhow::Error;
 use chunk::Chunk;
 use ecs::{CollisionStatus, EntityOrientation, EntityPosition, EntityVelocity, MovementIntent};
@@ -12,6 +14,14 @@ pub const RENDER_DISTANCE_SQ: i32 = RENDER_DISTANCE * RENDER_DISTANCE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NetworkId(pub u64);
+
+impl Deref for NetworkId {
+    type Target = u64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 pub trait Packet: Serialize + DeserializeOwned {
     fn encode(self) -> Result<Vec<u8>, Error> {
@@ -35,11 +45,13 @@ pub trait Packet: Serialize + DeserializeOwned {
 pub enum ServerMessage {
     ClientSpawned(NetworkId),
     ChunkData(Box<Chunk>),
+
     EntitySpawn {
         entity_id: NetworkId,
         position: EntityPosition,
     },
     EntityDespawn(NetworkId),
+
     EntityMove {
         entity_id: NetworkId,
         position: EntityPosition,

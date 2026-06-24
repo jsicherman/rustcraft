@@ -1,5 +1,5 @@
 [package]
-authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com>"]
 description = "Protocol code"
 edition = "2024"
 name = "protocol"

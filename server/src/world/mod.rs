@@ -38,10 +38,10 @@ impl<G: WorldGenerator> GameWorld<G> {
     pub fn spawn<B: Bundle>(
         &mut self,
         server: &mut RenetServer,
-        observers: impl Iterator<Item = u64>,
+        observers: impl Iterator<Item = NetworkId>,
         entity_id: NetworkId,
         bundle: B,
-    ) -> Result<EntityWorldMut<'_>, Error> {
+    ) -> Result<(EntityWorldMut<'_>, EntityPosition), Error> {
         let entity = self.world_mut().spawn(bundle);
         let Some(position) = entity.get::<EntityPosition>() else {
             anyhow::bail!("entity needs EntityPosition");
@@ -53,16 +53,21 @@ impl<G: WorldGenerator> GameWorld<G> {
         }
         .encode()?;
 
+        let mut observed = 0;
         for observer in observers {
-            server.send_message(observer, CHANNEL_ENTITIES, msg.clone());
+            observed += 1;
+            server.send_message(*observer, CHANNEL_ENTITIES, msg.clone());
         }
 
-        Ok(entity)
+        tracing::debug!("Spawn: {entity_id:?} ({observed} observers)");
+
+        let position = *position;
+        Ok((entity, position))
     }
     pub fn despawn(
         &mut self,
         server: &mut RenetServer,
-        observers: impl Iterator<Item = u64>,
+        observers: impl Iterator<Item = NetworkId>,
         entity_id: NetworkId,
         entity: Entity,
     ) -> bool {
@@ -71,9 +76,14 @@ impl<G: WorldGenerator> GameWorld<G> {
         }
 
         let msg = ServerMessage::EntityDespawn(entity_id).encode().unwrap();
+
+        let mut observed = 0;
         for observer in observers {
-            server.send_message(observer, CHANNEL_ENTITIES, msg.clone());
+            observed += 1;
+            server.send_message(*observer, CHANNEL_ENTITIES, msg.clone());
         }
+
+        tracing::debug!("Despawn: {entity_id:?} ({observed} observers)");
 
         true
     }

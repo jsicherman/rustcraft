@@ -9,7 +9,13 @@ use winit::event_loop::EventLoop;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::DEBUG.into())
+                .add_directive("naga=info".parse().unwrap())
+                .add_directive("wgpu_core=info".parse().unwrap())
+                .add_directive("wgpu_hal=info".parse().unwrap()),
+        )
         .init();
 
     let config = load_config(None);

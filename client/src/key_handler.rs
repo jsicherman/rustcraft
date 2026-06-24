@@ -17,12 +17,8 @@ impl AppState {
         self.client.update(dt);
         self.transport.update(dt, &mut self.client).ok();
 
-        let Some(player_network_id) = self.local_player_network_id else {
-            return (Vec3fGlobal::new(0.0, 0.0, 0.0), Default::default());
-        };
-
-        let Some(&player_entity) = self.network_to_local.get(&player_network_id) else {
-            return (Vec3fGlobal::new(0.0, 0.0, 0.0), Default::default());
+        let Some((_, Some(player_entity))) = self.local_player else {
+            return (Default::default(), Default::default());
         };
 
         let axis = |positive: KeyCode, negative: KeyCode| -> f32 {
@@ -73,9 +69,9 @@ impl AppState {
             false,
         );
 
-        let should_sync_intent = self.last_sent_intent != Some(*intent);
+        let should_sync_intent = self.previous_state.intent != Some(*intent);
         // FIXME: quantize
-        let should_sync_orientation = self.last_sent_orientation != Some(*orientation);
+        let should_sync_orientation = self.previous_state.orientation != Some(*orientation);
 
         if self.client.is_connected() {
             if should_sync_intent {
@@ -90,10 +86,10 @@ impl AppState {
         }
 
         if should_sync_intent {
-            self.last_sent_intent = Some(*intent);
+            self.previous_state.intent = Some(*intent);
         }
         if should_sync_orientation {
-            self.last_sent_orientation = Some(*orientation);
+            self.previous_state.orientation = Some(*orientation);
         }
 
         let new_velocity = ecs::movement::apply_gravity(velocity.0, &intent, *collision_status, dt);
@@ -106,7 +102,7 @@ impl AppState {
             *collider,
             *collision_status,
             new_velocity,
-            &self.loaded_chunks,
+            &self.chunk_state,
             &self.block_registry,
             dt,
         );

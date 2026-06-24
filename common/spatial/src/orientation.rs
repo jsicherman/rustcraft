@@ -1,14 +1,14 @@
 use std::{
     ops::{
         Bound::{Excluded, Included, Unbounded},
-        RangeBounds,
+        Mul, RangeBounds,
     },
     time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
 
-use crate::vectors::{Vec3f, Vec3fGlobal, Vec3iGlobal, Vec4f};
+use crate::vectors::{Global, Vec3f, Vec3fGlobal, Vec3iGlobal, Vec4f};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -43,6 +43,17 @@ impl From<Direction> for Vec3iGlobal {
 pub struct Orientation {
     yaw: f32,
     pitch: f32,
+}
+
+impl Mul<[f32; 2]> for Orientation {
+    type Output = Self;
+
+    fn mul(self, rhs: [f32; 2]) -> Self::Output {
+        Self::Output {
+            yaw: self.yaw * rhs[0],
+            pitch: self.pitch * rhs[1],
+        }
+    }
 }
 
 impl Orientation {
@@ -100,6 +111,20 @@ impl Orientation {
         }
 
         self
+    }
+
+    pub fn apply_to(&self, matrix: [Vec4f<Global>; 4]) -> [Vec4f<Global>; 4] {
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+
+        let rot: [Vec4f<Global>; 4] = [
+            [cos_yaw, 0.0, -sin_yaw, 0.0].into(),
+            [sin_yaw * sin_pitch, cos_pitch, cos_yaw * sin_pitch, 0.0].into(),
+            [sin_yaw * cos_pitch, -sin_pitch, cos_yaw * cos_pitch, 0.0].into(),
+            [0.0, 0.0, 0.0, 1.0].into(),
+        ];
+
+        Vec4f::mat_mul(matrix, rot)
     }
 
     pub fn movement_offset(

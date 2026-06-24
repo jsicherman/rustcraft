@@ -103,23 +103,16 @@ pub fn mesh_chunk(voxels: &[Material], size: [usize; 3]) -> Vec<Quad> {
 pub(crate) fn build_mesh_geometry(
     voxels: &[Material],
     size: [usize; 3],
-    offset: [f32; 3],
     material_layers: &[[u32; 6]],
 ) -> (Vec<Vertex>, Vec<u32>) {
     let quads = mesh_chunk(voxels, size);
 
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
+    let mut vertices = Vec::with_capacity(quads.len() * 4);
+    let mut indices = Vec::with_capacity(quads.len() * 6);
 
     for quad in &quads {
         let base = vertices.len() as u32;
-        let (mut verts, idxs) = quad_to_vertices_with_layers(quad, material_layers);
-
-        for v in &mut verts {
-            v.position[0] += offset[0];
-            v.position[1] += offset[1];
-            v.position[2] += offset[2];
-        }
+        let (verts, idxs) = quad_to_vertices_with_layers(quad, material_layers);
 
         vertices.extend_from_slice(&verts);
         indices.extend(idxs.iter().map(|i| i + base));
