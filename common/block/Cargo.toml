@@ -7,4 +7,6 @@ publish = false
 version = "0.1.0"
 
 [dependencies]
+entity = { path = "../../common/entity" }
+
 serde.workspace = true

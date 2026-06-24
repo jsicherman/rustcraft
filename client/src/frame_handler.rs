@@ -22,6 +22,12 @@ impl AppState {
             .query::<(Entity, &EntityPosition, &EntityOrientation, &EntityModel)>();
 
         for (entity, position, orientation, model) in query.iter(&self.world) {
+            if let Some((_, Some(local_entity))) = self.local_player
+                && local_entity == entity
+            {
+                return;
+            }
+
             if (position.0 - current_position).length_sq()
                 > RENDER_DISTANCE_SQ as f32 * CHUNK_SIZE_SQ as f32
             {
@@ -43,12 +49,13 @@ impl AppState {
                     yaw.apply_to(position.0.translation_matrix())
                         .map(std::convert::Into::into),
                 )
-                // FIXME: this needs to be specified in the model template
-                .with_node_transform(
-                    "head",
-                    pitch.apply_to(VEC4F_IDENTITY).map(std::convert::Into::into),
-                )
-                .with_node_pivot("head", [-0.5, 0.0, -0.5]),
+                .with_transforms_pivots(
+                    [(
+                        "head",
+                        pitch.apply_to(VEC4F_IDENTITY).map(std::convert::Into::into),
+                    )],
+                    [("head", [-0.5, 0.0, -0.5])],
+                ),
                 //.with_node_transform("left_arm", arm_rotation)
                 //.with_node_pivot("left_arm", [0.0, -0.375, -0.125]),
             );
@@ -56,11 +63,11 @@ impl AppState {
     }
 
     pub fn request_entity_frame(&mut self, entity: Entity, current_position: Vec3fGlobal) {
-        /*if let Some((_, Some(local_entity))) = self.local_player
+        if let Some((_, Some(local_entity))) = self.local_player
             && local_entity == entity
         {
             return;
-        }*/
+        }
 
         let Ok((position, _orientation, model)) =
             self.world
@@ -204,6 +211,7 @@ impl AppState {
         };
 
         self.renderer.render(
+            &mut self.render_queue,
             &self.window,
             &instances,
             vp.map(std::convert::Into::into),

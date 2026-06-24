@@ -79,6 +79,8 @@ struct CameraUniform {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ObjectUniform {
     transform: [[f32; 4]; 4],
+    mat_layers_0: [u32; 4],
+    mat_layers_1: [u32; 4],
 }
 
 impl Vertex {
@@ -199,7 +201,7 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
         label: Some("object bgl"),
         entries: &[BindGroupLayoutEntry {
             binding: 0,
-            visibility: ShaderStages::VERTEX,
+            visibility: ShaderStages::VERTEX_FRAGMENT,
             ty: BindingType::Buffer {
                 ty: BufferBindingType::Uniform,
                 has_dynamic_offset: true,
@@ -339,14 +341,14 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
         object_buffer,
         object_bind_group,
         object_uniform_stride,
-        meshes: HashMap::new(),
-        models: HashMap::new(),
-        mesh_handle_counter: 0,
         materials,
         egui_ctx,
         egui_renderer,
         egui_state,
         chunk_builder,
+        meshes: Default::default(),
+        models: Default::default(),
+        mesh_handle_counter: Default::default(),
     }
 }
 
@@ -400,13 +402,15 @@ impl Renderer {
 
     pub fn render(
         &mut self,
+        stack: &mut Vec<RenderCommandGpu>,
         window: &Window,
         instances: &[&RenderInstance],
         view_proj: [[f32; 4]; 4],
         debug_overlay: &DebugOverlayData,
     ) {
-        let mut commands = Vec::new();
-        self.build_commands(instances, &mut commands);
+        stack.clear();
+
+        self.build_commands(instances, stack);
 
         let raw_input = self.egui_state.take_egui_input(window);
         let full_output = self.egui_ctx.run_ui(raw_input, |ctx| {
@@ -473,11 +477,11 @@ impl Renderer {
             rpass.set_bind_group(0, &self.camera_bind_group, &[]);
             rpass.set_bind_group(2, &self.texture_bind_group, &[]);
 
-            let draw_count = commands.len().min(MAX_DRAW_OBJECTS as usize);
-            if draw_count < commands.len() {
+            let draw_count = stack.len().min(MAX_DRAW_OBJECTS as usize);
+            if draw_count < stack.len() {
                 tracing::warn!(
                     "draw list truncated: {} commands, max {}",
-                    commands.len(),
+                    stack.len(),
                     MAX_DRAW_OBJECTS
                 );
             }
@@ -486,10 +490,25 @@ impl Renderer {
                 let stride = self.object_uniform_stride as usize;
                 let mut object_upload = vec![0u8; draw_count * stride];
 
-                for (draw_idx, command) in commands.iter().take(draw_count).enumerate() {
+                for (draw_idx, command) in stack.iter().take(draw_count).enumerate() {
                     let start = draw_idx * stride;
                     let object_uniform = ObjectUniform {
                         transform: command.transform,
+                        mat_layers_0: if let Some(mat) = command.material {
+                            let mut layers = [0u32; 4];
+                            layers[0] = 1;
+                            layers[1..4].copy_from_slice(&mat.0[0..3]);
+                            layers
+                        } else {
+                            [0u32; 4]
+                        },
+                        mat_layers_1: if let Some(mat) = command.material {
+                            let mut layers = [0u32; 4];
+                            layers[0..3].copy_from_slice(&mat.0[3..6]);
+                            layers
+                        } else {
+                            [0u32; 4]
+                        },
                     };
 
                     let uniform_bytes = bytes_of(&object_uniform);
@@ -501,7 +520,7 @@ impl Renderer {
                     .write_buffer(&self.object_buffer, 0, &object_upload);
             }
 
-            for (draw_idx, command) in commands.iter().take(draw_count).enumerate() {
+            for (draw_idx, command) in stack.iter().take(draw_count).enumerate() {
                 let Some(asset) = self.meshes.get(&command.mesh) else {
                     continue;
                 };
@@ -591,8 +610,7 @@ impl Renderer {
                 index_buffer,
                 index_count: indices.len() as u32,
             },
-            // FIXME
-            material: MaterialTextures([0; 6]),
+            material: None,
         };
 
         let handle = MeshHandle::from(self.mesh_handle_counter);

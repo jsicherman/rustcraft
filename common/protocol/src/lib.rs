@@ -2,7 +2,10 @@ use std::ops::Deref;
 
 use anyhow::Error;
 use chunk::Chunk;
-use ecs::{CollisionStatus, EntityOrientation, EntityPosition, EntityVelocity, MovementIntent};
+use ecs::{
+    BoxCollider, CollisionStatus, EntityModel, EntityOrientation, EntityPosition, EntityVelocity,
+    MovementIntent,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub const PROTOCOL_ID: u64 = 0xABCDEF;
@@ -49,6 +52,8 @@ pub enum ServerMessage {
     EntitySpawn {
         entity_id: NetworkId,
         position: EntityPosition,
+        bounding_box: BoxCollider,
+        model: EntityModel,
     },
     EntityDespawn(NetworkId),
 

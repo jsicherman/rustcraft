@@ -10,9 +10,10 @@ pub mod world;
 use crate::{camera::Camera, renderer::RenderState, settings::AppConfig, world::ChunkCache};
 use block::BlockRegistry;
 use ecs::{Entity, EntityOrientation, MovementIntent, World};
+use entity::EntityType;
 use model::ModelDefinition;
 use protocol::{NetworkId, PROTOCOL_ID};
-use render::Renderer;
+use render::{Renderer, model::RenderCommandGpu};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use spatial::vectors::Vec2iChunk;
@@ -49,6 +50,7 @@ impl App {
 pub struct AppState {
     window: Arc<Window>,
     renderer: Renderer,
+    render_queue: Vec<RenderCommandGpu>,
 
     client: RenetClient,
     transport: NetcodeClientTransport,
@@ -94,7 +96,10 @@ impl ApplicationHandler for App {
 
         let cube_mesh = renderer.cube();
         for definition in ModelDefinition::iter() {
-            renderer.insert_model(definition.handle(), definition.build(cube_mesh));
+            renderer.insert_model(
+                definition.handle(),
+                definition.build(cube_mesh, block_registry.get_textures(EntityType::Human)),
+            );
         }
 
         let client = RenetClient::new(Default::default());
@@ -132,6 +137,7 @@ impl ApplicationHandler for App {
             network_to_local: Default::default(),
             pressed_keys: Default::default(),
             previous_state: Default::default(),
+            render_queue: Default::default(),
             last_update: Instant::now(),
         });
     }

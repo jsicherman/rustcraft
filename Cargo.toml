@@ -3,6 +3,7 @@ members = [
     "common/block",
     "common/chunk",
     "common/ecs",
+    "common/entity",
     "common/model",
     "common/protocol",
     "common/spatial",

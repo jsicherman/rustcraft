@@ -489,6 +489,7 @@ dependencies = [
 name = "block"
 version = "0.1.0"
 dependencies = [
+ "entity",
  "serde",
 ]
 
@@ -672,6 +673,7 @@ dependencies = [
  "block",
  "chunk",
  "ecs",
+ "entity",
  "model",
  "pollster",
  "protocol",
@@ -971,6 +973,7 @@ dependencies = [
  "bevy_ecs",
  "block",
  "chunk",
+ "model",
  "ordered-float",
  "render",
  "serde",
@@ -1046,6 +1049,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b53f0d33a479321da6b0caa71366c9f67e8a2c149762d90bdc0d16e601ee8ecb"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "entity"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1835,6 +1845,7 @@ dependencies = [
 name = "model"
 version = "0.1.0"
 dependencies = [
+ "block",
  "render",
  "serde",
 ]
@@ -3064,6 +3075,8 @@ dependencies = [
  "block",
  "chunk",
  "ecs",
+ "entity",
+ "model",
  "noise",
  "protocol",
  "renet",
@@ -3187,6 +3200,8 @@ dependencies = [
 name = "spatial"
 version = "0.1.0"
 dependencies = [
+ "entity",
+ "model",
  "serde",
 ]
 

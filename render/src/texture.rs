@@ -12,6 +12,12 @@ use wgpu::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialTextures(pub(crate) [u32; 6]);
 
+impl From<[u32; 6]> for MaterialTextures {
+    fn from(value: [u32; 6]) -> Self {
+        Self(value)
+    }
+}
+
 #[expect(unused)]
 pub struct TextureArray {
     texture: Texture,
@@ -43,8 +49,12 @@ pub fn build_texture_array(
         })
     };
 
-    for block in registry.iter() {
-        match block.texture() {
+    for texture in registry
+        .blocks()
+        .map(|block| block.texture())
+        .chain(registry.textures())
+    {
+        match texture {
             BlockTexture::Uniform(p) => {
                 intern(p);
             }
@@ -139,7 +149,7 @@ pub fn build_texture_array(
     });
 
     let materials = registry
-        .iter()
+        .blocks()
         .map(|block| match block.texture() {
             BlockTexture::Uniform(p) => {
                 let layer = layer_of[p];

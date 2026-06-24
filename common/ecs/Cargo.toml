@@ -9,6 +9,7 @@ version = "0.1.0"
 [dependencies]
 block = { path = "../block" }
 chunk = { path = "../chunk" }
+model = { path = "../model" }
 render = { path = "../../render" }
 spatial = { path = "../spatial" }
 

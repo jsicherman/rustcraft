@@ -1,5 +1,6 @@
 use std::array::IntoIter;
 
+use block::TextureId;
 use render::model::{MeshHandle, ModelAsset, ModelHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,9 +19,21 @@ impl ModelDefinition {
         }
     }
 
-    pub fn build(self, cube_mesh: MeshHandle) -> ModelAsset {
+    pub fn height(self) -> f32 {
         match self {
-            Self::Humanoid => ModelAsset::humanoid().with_geometry(cube_mesh),
+            Self::Humanoid => 1.8,
+        }
+    }
+
+    pub fn half_width(self) -> f32 {
+        match self {
+            Self::Humanoid => 0.4,
+        }
+    }
+
+    pub fn build(self, cube_mesh: MeshHandle, textures: &[TextureId]) -> ModelAsset {
+        match self {
+            Self::Humanoid => ModelAsset::humanoid(textures).with_geometry(cube_mesh),
         }
     }
 }

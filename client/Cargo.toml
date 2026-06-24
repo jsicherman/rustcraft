@@ -22,6 +22,7 @@ path = "src/bin/client_mode.rs"
 block = { path = "../common/block" }
 chunk = { path = "../common/chunk" }
 ecs = { path = "../common/ecs" }
+entity = { path = "../common/entity" }
 model = { path = "../common/model" }
 protocol = { path = "../common/protocol" }
 render = { path = "../render" }

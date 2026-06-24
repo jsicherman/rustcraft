@@ -4,6 +4,8 @@ struct Camera {
 
 struct ObjectUniform {
     transform: mat4x4<f32>,
+    mat_layers_01: vec4<u32>,
+    mat_layers_02: vec4<u32>,
 }
 
 @group(0) @binding(0)
@@ -43,5 +45,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(tex_array, samp, in.uv, in.material);
+    let use_override = object.mat_layers_01[0] == 1u;
+    let layer = select(in.material, object.mat_layers_01[1], use_override);
+
+    return textureSampleLevel(tex_array, samp, in.uv, layer, 0.0);
 }

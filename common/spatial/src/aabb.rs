@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use model::ModelDefinition;
 use serde::{Deserialize, Serialize};
 
 use crate::vectors::{Chunk, CoordSpace, Global, IntoSpace, Vec2iChunk, Vec3f};
@@ -10,19 +11,15 @@ pub struct BoxCollider {
     half_width: f32,
 }
 
-impl Default for BoxCollider {
-    fn default() -> Self {
-        Self {
-            height: 1.8,
-            half_width: 0.4,
-        }
-    }
-}
-
 impl BoxCollider {
     pub fn new(height: f32, half_width: f32) -> Self {
         Self { height, half_width }
     }
+
+    pub fn for_model(model: ModelDefinition) -> Self {
+        Self::new(model.height(), model.half_width())
+    }
+
     pub fn height(&self) -> f32 {
         self.height
     }

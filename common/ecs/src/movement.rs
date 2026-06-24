@@ -1,8 +1,7 @@
-use std::{cmp::Reverse, collections::HashMap, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use block::BlockRegistry;
 use chunk::{ChunkMap, ChunkProvider};
-use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 use spatial::{
     aabb::{Aabb, AxisAlignedBoundingBox},
@@ -106,31 +105,35 @@ fn narrow_phase_aabb(
     velocity: Vec3fGlobal,
     dt: Duration,
 ) -> Option<CollisionEvent> {
-    if moving.intersects(&target) {
-        let dx_left = target.max().x() - moving.min().x();
-        let dx_right = moving.max().x() - target.min().x();
-        let dy_top = target.max().y() - moving.min().y();
-        let dy_bottom = moving.max().y() - target.min().y();
-        let dz_front = target.max().z() - moving.min().z();
-        let dz_back = moving.max().z() - target.min().z();
+    if moving.intersects_overlaps(&target) {
+        let dd = [0, 1, 2].map(|idx| {
+            (
+                target.max()[idx] - moving.min()[idx],
+                moving.max()[idx] - target.min()[idx],
+            )
+        });
+        let d = dd.map(|(left, right)| left.min(right));
+        let v = [
+            velocity.x().abs() + VELOCITY_EPSILON,
+            velocity.y().abs() + VELOCITY_EPSILON,
+            velocity.z().abs() + VELOCITY_EPSILON,
+        ];
 
-        let dx = dx_left.min(dx_right);
-        let dy = dy_top.min(dy_bottom);
-        let dz = dz_front.min(dz_back);
+        let [sx, sy, sz] = [0, 1, 2].map(|idx| d[idx] / v[idx]);
 
-        let normal = if dx <= dy && dx <= dz {
-            if dx_left < dx_right {
+        let normal = if sx < sy && sx < sz {
+            if dd[0].0 < dd[0].1 {
                 Direction::PlusX
             } else {
                 Direction::MinusX
             }
-        } else if dy <= dz {
-            if dy_top < dy_bottom {
+        } else if sy < sz {
+            if dd[1].0 < dd[1].1 {
                 Direction::PlusY
             } else {
                 Direction::MinusY
             }
-        } else if dz_front < dz_back {
+        } else if dd[2].0 < dd[2].1 {
             Direction::PlusZ
         } else {
             Direction::MinusZ
@@ -140,7 +143,7 @@ fn narrow_phase_aabb(
         return Some(CollisionEvent {
             toi: Duration::ZERO,
             normal,
-            penetration: dx.min(dy).min(dz),
+            penetration: d.iter().copied().fold(f32::INFINITY, f32::min),
         });
     }
 
@@ -244,7 +247,9 @@ fn narrow_phase_aabb(
     })
 }
 
-const MOVE_TOLERANCE: f32 = 1e-4;
+const MOVE_EPSILON: f32 = 1e-3;
+const FILTER_EPSILON: f32 = 2e-3;
+const VELOCITY_EPSILON: f32 = 1e-6;
 
 /// Collision detection and resolution for a single entity, based on its `Collider` and `Velocity`.
 pub fn apply_collision_aabb<CP: ChunkProvider>(
@@ -256,7 +261,7 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
     block_registry: &BlockRegistry,
     dt: Duration,
 ) -> (Vec3fGlobal, Vec3fGlobal, CollisionStatus) {
-    const MAX_COLLISION_ITERATIONS: usize = 5;
+    const MAX_COLLISION_ITERATIONS: usize = 2;
     const GROUND_NORMAL_THRESHOLD: f32 = 0.7;
 
     let dt_secs = dt.as_secs_f32();
@@ -292,7 +297,7 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
             }
 
             let candidate_aabb = candidate.aabb();
-            if !aabb_swept.intersects_epsilon(&candidate_aabb, -MOVE_TOLERANCE) {
+            if !aabb_swept.intersects_epsilon(&candidate_aabb, -FILTER_EPSILON) {
                 continue;
             }
 
@@ -311,25 +316,53 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
             break 'iterations;
         }
 
-        collisions.sort_by_key(|e| (e.toi, Reverse(OrderedFloat(e.penetration))));
-        let event = collisions[0];
+        collisions.sort_by(|a, b| {
+            a.toi.cmp(&b.toi).then(
+                b.penetration
+                    .partial_cmp(&a.penetration)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+        });
 
-        let is_already_intersecting =
-            event.toi == Duration::ZERO && event.penetration > MOVE_TOLERANCE;
+        let intersecting: SmallVec<[_; 4]> = collisions
+            .iter()
+            .filter(|e| e.toi == Duration::ZERO && e.penetration > MOVE_EPSILON)
+            .collect();
 
-        if is_already_intersecting {
-            position += event.normal * event.penetration;
-        } else {
-            let toi_secs = event.toi.as_secs_f32();
-            position += velocity * (toi_secs - MOVE_TOLERANCE).max(0.0);
-            remaining_dt -= toi_secs;
+        if !intersecting.is_empty() {
+            let mut handled_normals = SmallVec::<[_; 4]>::new();
+            for event in &intersecting {
+                if !handled_normals.contains(&event.normal) {
+                    position += event.normal * event.penetration;
+                    let dot = velocity.dot(event.normal);
+                    if dot < 0.0 {
+                        velocity -= event.normal * dot;
+                    }
+                    if !resolved_normals.contains(&event.normal) {
+                        resolved_normals.push(event.normal);
+                    }
+                    handled_normals.push(event.normal);
+                }
+            }
+
+            // Re-run the iteration
+            continue;
         }
 
+        let event = collisions[0];
+
+        let toi_secs = event.toi.as_secs_f32();
+        if toi_secs > 0.0 {
+            position += velocity * toi_secs;
+            remaining_dt -= toi_secs;
+            remaining_dt = remaining_dt.max(0.0);
+        }
+
+        let dot = velocity.dot(event.normal);
+        if dot < 0.0 {
+            velocity -= event.normal * dot;
+        }
         if !resolved_normals.contains(&event.normal) {
-            let dot = velocity.dot(event.normal);
-            if dot < 0.0 {
-                velocity -= event.normal * dot;
-            }
             resolved_normals.push(event.normal);
         }
     }

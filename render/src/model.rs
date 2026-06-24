@@ -1,5 +1,6 @@
 use std::{collections::HashMap, ops::Deref};
 
+use block::TextureId;
 use serde::{Deserialize, Serialize};
 
 use crate::{Mesh, texture::MaterialTextures};
@@ -38,7 +39,7 @@ impl Deref for ModelHandle {
 
 pub struct MeshAsset {
     pub(crate) mesh: Mesh,
-    pub(crate) material: MaterialTextures,
+    pub(crate) material: Option<MaterialTextures>,
 }
 
 impl MeshAsset {
@@ -56,7 +57,7 @@ pub struct ModelAsset {
 pub struct Node {
     name: Option<&'static str>,
     mesh: Option<MeshHandle>,
-    material_override: Option<MaterialTextures>,
+    material_override: Option<TextureId>,
     children: Vec<Node>,
     transform: [[f32; 4]; 4],
 }
@@ -72,7 +73,9 @@ impl ModelAsset {
         Self { root }
     }
 
-    pub fn humanoid() -> Self {
+    pub fn humanoid(textures: &[TextureId]) -> Self {
+        assert_eq!(textures.len(), 6, "Humanoid model requires 6 textures");
+
         fn scaled_translated(
             sx: f32,
             sy: f32,
@@ -92,26 +95,32 @@ impl ModelAsset {
         // Feet are at y=0.0, total height is 1.8 units.
         let head = Node::identity()
             .with_name("head")
+            .with_material(textures[0])
             .with_transform(scaled_translated(0.5, 0.5, 0.5, -0.25, 1.30, -0.25));
 
         let torso = Node::identity()
             .with_name("torso")
+            .with_material(textures[1])
             .with_transform(scaled_translated(0.5, 0.75, 0.25, -0.25, 0.55, -0.125));
 
         let left_arm = Node::identity()
             .with_name("left_arm")
+            .with_material(textures[2])
             .with_transform(scaled_translated(0.25, 0.75, 0.25, -0.50, 0.55, -0.125));
 
         let right_arm = Node::identity()
             .with_name("right_arm")
+            .with_material(textures[3])
             .with_transform(scaled_translated(0.25, 0.75, 0.25, 0.25, 0.55, -0.125));
 
         let left_leg = Node::identity()
             .with_name("left_leg")
+            .with_material(textures[4])
             .with_transform(scaled_translated(0.25, 0.75, 0.25, -0.25, -0.20, -0.125));
 
         let right_leg = Node::identity()
             .with_name("right_leg")
+            .with_material(textures[5])
             .with_transform(scaled_translated(0.25, 0.75, 0.25, 0.00, -0.20, -0.125));
 
         Self::with_root(
@@ -133,7 +142,6 @@ impl ModelAsset {
 
     fn assign_meshes_recursive(node: &mut Node, mesh: MeshHandle) {
         if node.children.is_empty() {
-            // Leaf node: assign mesh
             node.mesh = Some(mesh);
         } else {
             for child in &mut node.children {
@@ -175,7 +183,7 @@ impl Node {
         self
     }
 
-    pub fn with_material_override(mut self, material: MaterialTextures) -> Self {
+    pub fn with_material(mut self, material: TextureId) -> Self {
         self.material_override = Some(material);
         self
     }
@@ -186,10 +194,12 @@ impl Node {
     }
 }
 
+#[derive(Debug)]
 pub struct RenderInstance {
     pub(crate) handle: RenderHandle,
     pub(crate) transform: [[f32; 4]; 4],
     pub(crate) material_override: Option<MaterialTextures>,
+    pub(crate) node_materials: HashMap<&'static str, MaterialTextures>,
     pub(crate) node_transforms: HashMap<&'static str, [[f32; 4]; 4]>,
     pub(crate) node_pivots: HashMap<&'static str, [f32; 3]>,
 }
@@ -199,10 +209,29 @@ impl RenderInstance {
         Self {
             handle,
             transform,
-            node_transforms: HashMap::new(),
-            node_pivots: HashMap::new(),
-            material_override: None,
+            material_override: Default::default(),
+            node_transforms: Default::default(),
+            node_pivots: Default::default(),
+            node_materials: Default::default(),
         }
+    }
+
+    pub fn with_transforms(
+        mut self,
+        nodes: impl IntoIterator<Item = (&'static str, [[f32; 4]; 4])>,
+    ) -> Self {
+        self.node_transforms = nodes.into_iter().collect();
+        self
+    }
+
+    pub fn with_transforms_pivots(
+        mut self,
+        nodes: impl IntoIterator<Item = (&'static str, [[f32; 4]; 4])>,
+        pivots: impl IntoIterator<Item = (&'static str, [f32; 3])>,
+    ) -> Self {
+        self.node_transforms = nodes.into_iter().collect();
+        self.node_pivots = pivots.into_iter().collect();
+        self
     }
 
     pub fn with_node_transform(mut self, node: &'static str, transform: [[f32; 4]; 4]) -> Self {
@@ -215,7 +244,20 @@ impl RenderInstance {
         self
     }
 
-    pub fn with_material_override(mut self, material: MaterialTextures) -> Self {
+    pub fn with_materials(
+        mut self,
+        nodes: impl IntoIterator<Item = (&'static str, MaterialTextures)>,
+    ) -> Self {
+        self.node_materials = nodes.into_iter().collect();
+        self
+    }
+
+    pub fn with_node_material(mut self, node: &'static str, material: MaterialTextures) -> Self {
+        self.node_materials.insert(node, material);
+        self
+    }
+
+    pub fn with_material(mut self, material: MaterialTextures) -> Self {
         self.material_override = Some(material);
         self
     }
@@ -233,37 +275,40 @@ pub enum RenderHandle {
 
 pub struct RenderCommandGpu {
     pub(crate) mesh: MeshHandle,
-    pub(crate) material: MaterialTextures,
+    pub(crate) material: Option<MaterialTextures>,
     pub(crate) transform: [[f32; 4]; 4],
 }
 
 impl Asset for ModelAsset {
     fn build(&self, instance: &RenderInstance, stack: &mut Vec<RenderCommandGpu>) {
+        fn texture_id_material(id: TextureId) -> MaterialTextures {
+            MaterialTextures([id as u32; 6])
+        }
+
         fn _build(
             parent: &RenderInstance,
             node: &Node,
             parent_transform: [[f32; 4]; 4],
-            parent_material: Option<&MaterialTextures>,
             stack: &mut Vec<RenderCommandGpu>,
         ) {
-            let material = node
-                .material_override
-                .as_ref()
-                .or(parent_material)
+            let material = parent
+                .node_materials
+                .get(node.name.unwrap_or_default())
                 .copied()
+                .or(node.material_override.map(texture_id_material))
+                .or(parent.material_override)
                 .unwrap_or(ModelAsset::DEFAULT_TEXTURES);
 
             let composed = mat4_mul(node.transform, parent_transform);
             let transform = if let Some(local_transform) =
                 node.name.and_then(|name| parent.node_transforms.get(name))
             {
-                let adjusted_transform = if let Some(&pivot) =
-                    node.name.and_then(|name| parent.node_pivots.get(name))
-                {
-                    transform_with_pivot(*local_transform, pivot)
-                } else {
-                    *local_transform
-                };
+                let adjusted_transform =
+                    if let Some(&pivot) = node.name.and_then(|name| parent.node_pivots.get(name)) {
+                        transform_with_pivot(*local_transform, pivot)
+                    } else {
+                        *local_transform
+                    };
                 mat4_mul(adjusted_transform, composed)
             } else {
                 composed
@@ -272,23 +317,17 @@ impl Asset for ModelAsset {
             if let Some(mesh) = node.mesh {
                 stack.push(RenderCommandGpu {
                     mesh,
-                    material,
+                    material: Some(material),
                     transform,
                 });
             }
 
             for child in &node.children {
-                _build(parent, child, transform, Some(&material), stack);
+                _build(parent, child, transform, stack);
             }
         }
 
-        _build(
-            instance,
-            &self.root,
-            instance.transform,
-            instance.material_override.as_ref(),
-            stack,
-        );
+        _build(instance, &self.root, instance.transform, stack);
     }
 }
 
@@ -301,14 +340,14 @@ fn translate(x: f32, y: f32, z: f32) -> [[f32; 4]; 4] {
     ]
 }
 
-fn transform_with_pivot(
-    local_transform: [[f32; 4]; 4],
-    pivot: [f32; 3],
-) -> [[f32; 4]; 4] {
+fn transform_with_pivot(local_transform: [[f32; 4]; 4], pivot: [f32; 3]) -> [[f32; 4]; 4] {
     // To rotate around a pivot point: translate(pivot) * transform * translate(-pivot)
     let translate_to_pivot = translate(pivot[0], pivot[1], pivot[2]);
     let translate_from_pivot = translate(-pivot[0], -pivot[1], -pivot[2]);
-    mat4_mul(translate_to_pivot, mat4_mul(local_transform, translate_from_pivot))
+    mat4_mul(
+        translate_to_pivot,
+        mat4_mul(local_transform, translate_from_pivot),
+    )
 }
 
 fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
@@ -332,7 +371,7 @@ impl Asset for MeshAsset {
 
         stack.push(RenderCommandGpu {
             mesh,
-            material: instance.material_override.unwrap_or(self.material),
+            material: instance.material_override.or(self.material),
             transform: instance.transform,
         });
     }

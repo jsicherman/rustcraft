@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use entity::EntityType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -9,11 +10,23 @@ pub enum BlockId {
     Stone = 1,
     Grass = 2,
     Dirt = 3,
-    Missing = 4,
 }
 
 impl BlockId {
-    pub const MAX: usize = 5;
+    pub const MAX: usize = 4;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum TextureId {
+    Missing = BlockId::MAX as u8,
+    Head = BlockId::MAX as u8 + 1,
+    LightPart = BlockId::MAX as u8 + 2,
+    DarkPart = BlockId::MAX as u8 + 3,
+}
+
+impl TextureId {
+    pub const MAX: usize = 4;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,8 +106,10 @@ impl BlockSolidity {
     }
 }
 
+// FIXME: clean up
 pub struct BlockRegistry {
     blocks: Vec<BlockType>,
+    textures: Vec<BlockTexture>,
 }
 
 impl BlockRegistry {
@@ -139,25 +154,55 @@ impl BlockRegistry {
                 light_emission: BlockLightEmission(0),
                 hardness: BlockHardness(255),
             },
-            BlockType {
-                name: BlockName("Missing"),
-                texture: BlockTexture::Uniform(Path::new("textures/steve_skin.png")),
-                opacity: BlockOpacity(255),
-                solidity: BlockSolidity(255),
-                light_emission: BlockLightEmission(0),
-                hardness: BlockHardness(255),
-            },
         ];
 
         assert_eq!(blocks.len(), BlockId::MAX);
-        Self { blocks }
+
+        let textures = vec![
+            BlockTexture::Uniform(Path::new("textures/missing.png")),
+            BlockTexture::directional(
+                Path::new("textures/dirt.png"),
+                Path::new("textures/steve_shirt.png"),
+                Path::new("textures/steve_skin.png"),
+                Path::new("textures/stone.png"),
+                Path::new("textures/stone.png"),
+                Path::new("textures/stone.png"),
+            ),
+            BlockTexture::Uniform(Path::new("textures/steve_shirt.png")),
+            BlockTexture::Uniform(Path::new("textures/steve_pants.png")),
+        ];
+
+        assert_eq!(textures.len(), TextureId::MAX);
+
+        Self { blocks, textures }
+    }
+
+    pub fn get_textures(&self, entity: EntityType) -> &[TextureId] {
+        match entity {
+            EntityType::Human => &[
+                TextureId::Head,
+                TextureId::DarkPart,
+                TextureId::LightPart,
+                TextureId::LightPart,
+                TextureId::LightPart,
+                TextureId::LightPart,
+            ],
+        }
+    }
+
+    pub fn get_texture(&self, id: TextureId) -> &BlockTexture {
+        self.textures.get(id as usize).unwrap()
     }
 
     pub fn get_block_type(&self, id: BlockId) -> &BlockType {
         self.blocks.get(id as usize).unwrap()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &BlockType> {
+    pub fn blocks(&self) -> impl Iterator<Item = &BlockType> {
         self.blocks.iter()
+    }
+
+    pub fn textures(&self) -> impl Iterator<Item = &BlockTexture> {
+        self.textures.iter()
     }
 }

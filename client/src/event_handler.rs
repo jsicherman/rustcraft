@@ -67,13 +67,20 @@ impl AppState {
                 ServerMessage::EntitySpawn {
                     entity_id,
                     position,
+                    bounding_box,
+                    model,
                 } => {
                     let spawned_id = self
                         .world
-                        .spawn(SimulatedEntityBundle {
+                        .spawn(SimulatedEntityBundle::new(
                             position,
-                            ..Default::default()
-                        })
+                            Default::default(),
+                            Default::default(),
+                            Default::default(),
+                            bounding_box,
+                            model,
+                            Default::default(),
+                        ))
                         .id();
 
                     if let Some((id, entity)) = self.local_player.as_mut()
@@ -126,8 +133,8 @@ impl AppState {
                         && local_entity == *entity_id
                     {
                         let delta_p = (position.0 - client_position.0).length_sq();
-                        let delta_v = (velocity.0 - client_velocity.0).length_sq();
-                        if delta_p > 0.1 || delta_v > 5.0 {
+                        if delta_p > 0.1 {
+                            let delta_v = (velocity.0 - client_velocity.0).length_sq();
                             tracing::debug!(
                                 "Large player offset! delta_p = {delta_p:.4}, delta_v = {delta_v:.4}",
                             );

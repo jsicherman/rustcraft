@@ -10,6 +10,8 @@ version = "0.1.0"
 block = { path = "../common/block" }
 chunk = { path = "../common/chunk" }
 ecs = { path = "../common/ecs" }
+entity = { path = "../common/entity" }
+model = { path = "../common/model" }
 protocol = { path = "../common/protocol" }
 spatial = { path = "../common/spatial" }
 

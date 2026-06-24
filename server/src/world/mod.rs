@@ -2,7 +2,7 @@ use anyhow::Error;
 use bevy_ecs::{bundle::Bundle, world::EntityWorldMut};
 use block::BlockId;
 use chunk::{Chunk, ChunkMap, ChunkProvider};
-use ecs::{Entity, EntityPosition, World};
+use ecs::{BoxCollider, Entity, EntityModel, EntityPosition, World};
 use noise::{
     Fbm, Perlin,
     utils::{NoiseMapBuilder, PlaneMapBuilder},
@@ -43,13 +43,15 @@ impl<G: WorldGenerator> GameWorld<G> {
         bundle: B,
     ) -> Result<(EntityWorldMut<'_>, EntityPosition), Error> {
         let entity = self.world_mut().spawn(bundle);
-        let Some(position) = entity.get::<EntityPosition>() else {
-            anyhow::bail!("entity needs EntityPosition");
-        };
+
+        let (&position, &bounding_box, &model) =
+            entity.get_components::<(&EntityPosition, &BoxCollider, &EntityModel)>()?;
 
         let msg = ServerMessage::EntitySpawn {
             entity_id,
-            position: *position,
+            position,
+            bounding_box,
+            model,
         }
         .encode()?;
 
@@ -61,7 +63,6 @@ impl<G: WorldGenerator> GameWorld<G> {
 
         tracing::debug!("Spawn: {entity_id:?} ({observed} observers)");
 
-        let position = *position;
         Ok((entity, position))
     }
     pub fn despawn(

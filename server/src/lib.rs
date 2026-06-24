@@ -4,9 +4,10 @@ use anyhow::Error;
 use block::BlockRegistry;
 use chunk::ChunkMap;
 use ecs::{
-    Entity, EntityOrientation, EntityPosition, MovementIntent, SimulatedEntityBundle,
-    movement::MoveBundle,
+    BoxCollider, Entity, EntityModel, EntityOrientation, EntityPosition, MovementIntent,
+    SimulatedEntityBundle, movement::MoveBundle,
 };
+use model::ModelDefinition;
 use protocol::{
     CHANNEL_CHUNKS, CHANNEL_ENTITIES, ClientMessage, NetworkId, PROTOCOL_ID, Packet,
     RENDER_DISTANCE, RENDER_DISTANCE_SQ, ServerMessage,
@@ -197,7 +198,17 @@ impl<G: WorldGenerator> GameServer<G> {
         while let Some(event) = self.server.get_event() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
-                    let bundle = SimulatedEntityBundle::default();
+                    let bundle = SimulatedEntityBundle::new(
+                        EntityPosition([0.0, 70.0, 0.0].into()),
+                        Default::default(),
+                        Default::default(),
+                        Default::default(),
+                        BoxCollider(spatial::aabb::BoxCollider::for_model(
+                            ModelDefinition::Humanoid,
+                        )),
+                        EntityModel::for_model(ModelDefinition::Humanoid),
+                        Default::default(),
+                    );
                     let client_id = NetworkId(client_id);
 
                     let (entity_mut, position) = self.world.spawn(
@@ -328,7 +339,7 @@ impl<G: WorldGenerator> GameServer<G> {
 
         let observer_chunk = Vec2iChunk::from(position.0);
 
-        for (other_client_id, position) in
+        for (other_client_id, &position, &bounding_box, &model) in
             self.entities
                 .iter()
                 .filter_map(|(other_client_id, other_entity)| {
@@ -336,23 +347,26 @@ impl<G: WorldGenerator> GameServer<G> {
                         return None;
                     }
 
-                    let position = self
+                    let (position, bounding_box, model) = self
                         .world
                         .world()
-                        .get::<EntityPosition>(*other_entity)
-                        .copied()?;
+                        .entity(*other_entity)
+                        .get_components::<(&EntityPosition, &BoxCollider, &EntityModel)>()
+                        .ok()?;
                     let other_chunk = Vec2iChunk::from(position.0);
 
                     if (other_chunk - observer_chunk).length_sq() > RENDER_DISTANCE_SQ {
                         return None;
                     }
 
-                    Some((*other_client_id, position))
+                    Some((*other_client_id, position, bounding_box, model))
                 })
         {
             let msg = ServerMessage::EntitySpawn {
                 entity_id: other_client_id,
                 position,
+                bounding_box,
+                model,
             }
             .encode()?;
 

@@ -1,6 +1,7 @@
 pub mod movement;
 
 use bevy_ecs::{bundle::Bundle, component::Component};
+use model::ModelDefinition;
 use render::model::ModelHandle;
 use serde::{Deserialize, Serialize};
 use spatial::{
@@ -19,7 +20,7 @@ pub struct MovementIntent {
     sneak: bool,
 }
 
-#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EntityModel {
     model_id: ModelHandle,
     animation_state: AnimationState,
@@ -27,6 +28,14 @@ pub struct EntityModel {
 }
 
 impl EntityModel {
+    pub fn for_model(model: ModelDefinition) -> Self {
+        Self {
+            model_id: model.handle(),
+            animation_state: AnimationState::Idle,
+            transform: EntityTransform::default(),
+        }
+    }
+
     pub fn model(&self) -> ModelHandle {
         self.model_id
     }
@@ -54,11 +63,12 @@ pub enum AnimationState {
     Walking,
 }
 
-#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoxCollider(pub spatial::aabb::BoxCollider);
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CollisionStatus {
+    #[default]
     Airborne,
     OnGround,
     InLiquid,
@@ -126,22 +136,28 @@ pub struct SimulatedEntityBundle {
     pub collision_status: CollisionStatus,
 }
 
-impl Default for SimulatedEntityBundle {
-    fn default() -> Self {
+impl SimulatedEntityBundle {
+    pub fn new(
+        position: EntityPosition,
+        orientation: EntityOrientation,
+        velocity: EntityVelocity,
+        movement_intent: MovementIntent,
+        collider: BoxCollider,
+        model: EntityModel,
+        collision_status: CollisionStatus,
+    ) -> Self {
         Self {
-            position: EntityPosition([0.0, 90.0, 0.0].into()),
-            orientation: EntityOrientation::default(),
-            movement_intent: MovementIntent::default(),
-            velocity: EntityVelocity::default(),
-            collider: BoxCollider::default(),
-            model: EntityModel::default(),
-            collision_status: CollisionStatus::Airborne,
+            position,
+            orientation,
+            velocity,
+            movement_intent,
+            collider,
+            model,
+            collision_status,
         }
     }
 }
 
-#[derive(Component)]
-pub struct LocalPlayer;
 #[derive(Component)]
 pub struct RemoteControlled;
 #[derive(Component)]
