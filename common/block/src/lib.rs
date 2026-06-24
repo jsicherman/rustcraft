@@ -141,7 +141,7 @@ impl BlockRegistry {
             },
             BlockType {
                 name: BlockName("Missing"),
-                texture: BlockTexture::Uniform(Path::new("textures/missing.png")),
+                texture: BlockTexture::Uniform(Path::new("textures/steve_skin.png")),
                 opacity: BlockOpacity(255),
                 solidity: BlockSolidity(255),
                 light_emission: BlockLightEmission(0),

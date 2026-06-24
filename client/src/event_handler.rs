@@ -2,18 +2,28 @@ use ecs::{
     CollisionStatus, EntityOrientation, EntityPosition, EntityVelocity, SimulatedEntityBundle,
 };
 use protocol::{CHANNEL_CHUNKS, CHANNEL_ENTITIES, Packet, RENDER_DISTANCE_SQ, ServerMessage};
-use spatial::vectors::Vec2iChunk;
+use render::model::RenderHandle;
+use spatial::vectors::{Vec2iChunk, Vec3fGlobal};
 
-use crate::{
-    AppState,
-    world::{ClientChunk, ClientRenderable},
-};
+use crate::{AppState, chunk::ClientChunk, renderer::NetworkRenderable};
 
 impl AppState {
-    pub(crate) fn receive_chunks(&mut self, chunk_position: Vec2iChunk) {
-        self.loaded_chunks
-            .chunks
-            .retain(|coord, _| (*coord - chunk_position).length_sq() <= RENDER_DISTANCE_SQ);
+    pub(crate) fn receive_chunk_messages(&mut self, chunk_position: Vec2iChunk) {
+        self.chunk_state.chunks.retain(|coord, chunk| {
+            let retained = (*coord - chunk_position).length_sq() <= RENDER_DISTANCE_SQ;
+
+            if !retained && let Some(instance) = chunk.instance() {
+                let RenderHandle::Mesh(mesh) = instance.handle() else {
+                    unreachable!();
+                };
+
+                // chunks are only singly-referenced, so drop the mesh when the chunk is unloaded
+                tracing::debug!("dropping mesh {mesh:?} for chunk {coord:?}");
+                self.renderer.remove_mesh(&mesh);
+            }
+
+            retained
+        });
 
         while let Some(msg) = self.client.receive_message(CHANNEL_CHUNKS) {
             let msg = ServerMessage::decode(&msg).unwrap();
@@ -26,7 +36,7 @@ impl AppState {
                         continue;
                     }
 
-                    self.loaded_chunks
+                    self.chunk_state
                         .chunks
                         .insert(coordinate, ClientChunk::new(*chunk));
                 }
@@ -41,14 +51,52 @@ impl AppState {
         }
     }
 
-    pub(crate) fn receive_entities(&mut self, _chunk_position: Vec2iChunk) {
+    pub(crate) fn receive_entity_messages(&mut self, current_position: Vec3fGlobal) {
         while let Some(msg) = self.client.receive_message(CHANNEL_ENTITIES) {
             let msg = ServerMessage::decode(&msg).unwrap();
 
             match msg {
                 ServerMessage::ChunkData(_) => unreachable!(),
                 ServerMessage::ClientSpawned(entity_id) => {
-                    self.local_player_network_id = Some(entity_id);
+                    if let Some(entity) = self.network_to_local.get(&entity_id) {
+                        self.local_player = Some((entity_id, Some(*entity)));
+                    } else {
+                        self.local_player = Some((entity_id, None));
+                    }
+                }
+                ServerMessage::EntitySpawn {
+                    entity_id,
+                    position,
+                } => {
+                    let spawned_id = self
+                        .world
+                        .spawn(SimulatedEntityBundle {
+                            position,
+                            ..Default::default()
+                        })
+                        .id();
+
+                    if let Some((id, entity)) = self.local_player.as_mut()
+                        && *id == entity_id
+                        && entity.is_none()
+                    {
+                        *entity = Some(spawned_id);
+                    }
+
+                    self.network_to_local.insert(entity_id, spawned_id);
+                    self.request_entity_frame(spawned_id, current_position);
+                }
+                ServerMessage::EntityDespawn(entity_id) => {
+                    if let Some(entity) = self.network_to_local.remove(&entity_id) {
+                        self.world.despawn(entity);
+                        self.entity_state.remove_instance(&entity);
+                    }
+
+                    if let Some((id, _)) = self.local_player
+                        && id == entity_id
+                    {
+                        self.local_player = None;
+                    }
                 }
                 ServerMessage::EntityMove {
                     entity_id,
@@ -56,11 +104,11 @@ impl AppState {
                     velocity,
                     collision_status,
                 } => {
-                    let Some(entity) = self.network_to_local.get(&entity_id) else {
+                    let Some(entity_id) = self.network_to_local.get(&entity_id) else {
                         continue;
                     };
 
-                    let Ok(mut entity) = self.world.get_entity_mut(*entity) else {
+                    let Ok(mut entity) = self.world.get_entity_mut(*entity_id) else {
                         continue;
                     };
 
@@ -74,81 +122,41 @@ impl AppState {
                         continue;
                     };
 
-                    /*tracing::debug!(
-                        "dP: {:.3?} {}",
-                        position.0 - client_position.0,
-                        *client_collision_status == collision_status
-                    );
-                    tracing::debug!("dV: {:.3?}", velocity.0 - client_velocity.0);*/
-
-                    let position_changed = *client_position != position;
+                    if let Some((_, Some(local_entity))) = self.local_player
+                        && local_entity == *entity_id
+                    {
+                        let delta_p = (position.0 - client_position.0).length_sq();
+                        let delta_v = (velocity.0 - client_velocity.0).length_sq();
+                        if delta_p > 0.1 || delta_v > 5.0 {
+                            tracing::debug!(
+                                "Large player offset! delta_p = {delta_p:.4}, delta_v = {delta_v:.4}",
+                            );
+                        }
+                    }
 
                     *client_position = position;
                     *client_velocity = velocity;
                     *client_collision_status = collision_status;
 
-                    // Entity meshes are baked with world-space offsets, so they must be
-                    // rebuilt when the entity position changes.
-                    // FIXME: check this
-                    if position_changed
-                        && let Some(client_entity) =
-                            self.loaded_entities.entities.get_mut(&entity_id)
-                    {
-                        client_entity.mark_dirty();
-                    }
+                    self.request_entity_frame(*entity_id, current_position);
                 }
                 ServerMessage::EntityLook {
                     entity_id,
                     orientation,
                 } => {
-                    if self.local_player_network_id == Some(entity_id) {
-                        continue;
-                    }
-
-                    let Some(entity) = self.network_to_local.get(&entity_id) else {
+                    let Some(entity_id) = self.network_to_local.get(&entity_id) else {
                         continue;
                     };
 
-                    let Ok(mut entity) = self.world.get_entity_mut(*entity) else {
+                    let Ok(mut entity) = self.world.get_entity_mut(*entity_id) else {
                         continue;
                     };
 
                     if let Some(mut client_orientation) = entity.get_mut::<EntityOrientation>() {
-                        let orientation_changed = *client_orientation != orientation;
                         *client_orientation = orientation;
+                    }
 
-                        if orientation_changed
-                            && let Some(client_entity) =
-                                self.loaded_entities.entities.get_mut(&entity_id)
-                        {
-                            client_entity.mark_dirty();
-                        }
-                    }
-                }
-                ServerMessage::EntitySpawn {
-                    entity_id,
-                    position,
-                } => {
-                    self.network_to_local.insert(
-                        entity_id,
-                        self.world
-                            .spawn(SimulatedEntityBundle {
-                                position,
-                                ..Default::default()
-                            })
-                            .id(),
-                    );
-                    self.loaded_entities
-                        .entities
-                        .insert(entity_id, Default::default());
-                }
-                ServerMessage::EntityDespawn(entity_id) => {
-                    if let Some(entity) = self.network_to_local.remove(&entity_id) {
-                        self.world.despawn(entity);
-                    }
-                    if self.local_player_network_id == Some(entity_id) {
-                        self.local_player_network_id = None;
-                    }
+                    self.request_entity_frame(*entity_id, current_position);
                 }
             }
         }

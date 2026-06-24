@@ -1,21 +1,18 @@
-use std::sync::{
-    Arc,
-    mpsc::{self, Receiver, Sender},
-};
+use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
 use block::BlockRegistry;
-use bytemuck::{Pod, Zeroable, cast_slice};
+use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use egui::{Context, ViewportId};
 use egui_wgpu::ScreenDescriptor;
 use egui_winit::State;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BlendState, Buffer, BufferBindingType,
-    BufferSlice, BufferUsages, Color, ColorTargetState, ColorWrites, CompareFunction,
-    CurrentSurfaceTexture, DepthStencilState, Device, DeviceDescriptor, Extent3d, Face,
-    FragmentState, IndexFormat, Instance, LoadOp, Operations, PipelineLayoutDescriptor,
-    PowerPreference, PresentMode, PrimitiveState, PrimitiveTopology, Queue,
-    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
+    BindGroupLayoutEntry, BindingResource, BindingType, BlendState, Buffer, BufferBinding,
+    BufferBindingType, BufferDescriptor, BufferSlice, BufferUsages, Color, ColorTargetState,
+    ColorWrites, CompareFunction, CurrentSurfaceTexture, DepthStencilState, Device,
+    DeviceDescriptor, Extent3d, Face, FragmentState, IndexFormat, Instance, LoadOp, Operations,
+    PipelineLayoutDescriptor, PowerPreference, PresentMode, PrimitiveState, PrimitiveTopology,
+    Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
     RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, SamplerBindingType,
     ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, Surface, SurfaceConfiguration,
     Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
@@ -26,8 +23,13 @@ use wgpu::{
 use winit::{event::WindowEvent, window::Window};
 
 use crate::{
+    VoxelMesher,
     debug_overlay::{DebugOverlayData, draw as draw_debug_overlay},
-    mesh::{Material, Vertex, build_mesh_geometry},
+    mesher::Vertex,
+    model::{
+        Asset, MeshAsset, MeshHandle, ModelAsset, ModelHandle, RenderCommandGpu, RenderHandle,
+        RenderInstance,
+    },
     texture::{MaterialTextures, build_texture_array},
 };
 
@@ -40,108 +42,43 @@ pub struct Renderer {
     texture_bind_group: BindGroup,
     camera_buffer: Buffer,
     camera_bind_group: BindGroup,
+    object_buffer: Buffer,
+    object_bind_group: BindGroup,
+    object_uniform_stride: u64,
     depth_texture: Texture,
+    pub meshes: HashMap<MeshHandle, MeshAsset>,
+    pub models: HashMap<ModelHandle, ModelAsset>,
+    mesh_handle_counter: u32,
     materials: Vec<MaterialTextures>,
     egui_ctx: Context,
     egui_renderer: egui_wgpu::Renderer,
     egui_state: State,
-    pub chunk_builder: MeshBuilder<(i32, i32)>,
-    pub entity_builder: MeshBuilder<u64>,
+    pub chunk_builder: VoxelMesher,
 }
 
 pub struct MeshGpu {
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    index_count: u32,
+    pub(crate) vertex_buffer: Buffer,
+    pub(crate) index_buffer: Buffer,
+    pub(crate) index_count: u32,
 }
 
 pub struct MeshCpu {
-    vertices: Vec<Vertex>,
-    indices: Vec<u32>,
+    pub(crate) vertices: Vec<Vertex>,
+    pub(crate) indices: Vec<u32>,
 }
 
-struct MeshBuildJob<K: PartialEq + Send + Sync + 'static> {
-    key: K,
-    voxels: Vec<u32>,
-    size_xyz: [usize; 3],
-    offset: [f32; 3],
-}
-
-pub struct MeshBuildResult<K: PartialEq + Send + Sync + 'static> {
-    pub key: K,
-    pub mesh: MeshCpu,
-}
-
-pub struct MeshBuilder<K: PartialEq + Send + Sync + 'static> {
-    job_tx: Sender<MeshBuildJob<K>>,
-    result_rx: Receiver<MeshBuildResult<K>>,
-}
-
-impl MeshGpu {
-    pub fn index_count(&self) -> u32 {
-        self.index_count
-    }
-}
-
-impl MeshCpu {
-    pub fn index_count(&self) -> u32 {
-        self.indices.len() as u32
-    }
-
-    pub fn rotate_about(mut self, pivot: [f32; 3], yaw: f32, pitch: f32) -> Self {
-        rotate_cpu_mesh(&mut self, pivot, yaw, pitch);
-        self
-    }
-}
-
-impl<K: PartialEq + Send + Sync + 'static> MeshBuilder<K> {
-    pub fn new(material_layers: Vec<[u32; 6]>) -> Self {
-        let (job_tx, job_rx) = mpsc::channel::<MeshBuildJob<K>>();
-        let (result_tx, result_rx) = mpsc::channel::<MeshBuildResult<K>>();
-
-        std::thread::spawn(move || {
-            while let Ok(job) = job_rx.recv() {
-                let cpu_mesh =
-                    build_cpu_mesh(&job.voxels, job.size_xyz, job.offset, &material_layers);
-
-                if result_tx
-                    .send(MeshBuildResult {
-                        key: job.key,
-                        mesh: cpu_mesh,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-
-        Self { job_tx, result_rx }
-    }
-
-    pub fn enqueue(&self, key: K, voxels: Vec<u32>, size_xyz: [usize; 3], offset: [f32; 3]) {
-        let _ = self.job_tx.send(MeshBuildJob {
-            key,
-            voxels,
-            size_xyz,
-            offset,
-        });
-    }
-
-    pub fn collect_results(&mut self) -> Vec<MeshBuildResult<K>> {
-        let mut results = Vec::new();
-        while let Ok(result) = self.result_rx.try_recv() {
-            results.push(result);
-        }
-
-        results
-    }
-}
+const MAX_DRAW_OBJECTS: u64 = 16_384;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct ObjectUniform {
+    transform: [[f32; 4]; 4],
 }
 
 impl Vertex {
@@ -246,6 +183,45 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
         }],
     });
 
+    let object_uniform_size = std::mem::size_of::<ObjectUniform>() as u64;
+    let min_uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
+    let object_uniform_stride =
+        object_uniform_size.div_ceil(min_uniform_alignment) * min_uniform_alignment;
+
+    let object_buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("object buffer"),
+        size: object_uniform_stride * MAX_DRAW_OBJECTS,
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let object_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("object bgl"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: true,
+                min_binding_size: NonZeroU64::new(object_uniform_size),
+            },
+            count: None,
+        }],
+    });
+
+    let object_bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("object bg"),
+        layout: &object_bgl,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::Buffer(BufferBinding {
+                buffer: &object_buffer,
+                offset: 0,
+                size: NonZeroU64::new(object_uniform_size),
+            }),
+        }],
+    });
+
     let texture_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("texture array bgl"),
         entries: &[
@@ -277,7 +253,7 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
 
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("pipeline layout"),
-        bind_group_layouts: &[Some(&camera_bgl), Some(&texture_bgl)],
+        bind_group_layouts: &[Some(&camera_bgl), Some(&object_bgl), Some(&texture_bgl)],
         immediate_size: 0,
     });
 
@@ -348,8 +324,7 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
 
     let material_layers: Vec<_> = materials.iter().map(|m| m.0).collect();
 
-    let entity_builder = MeshBuilder::new(material_layers.clone());
-    let chunk_builder = MeshBuilder::new(material_layers);
+    let chunk_builder = VoxelMesher::new(material_layers);
 
     Renderer {
         device,
@@ -361,18 +336,52 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
         camera_bind_group,
         depth_texture,
         texture_bind_group,
+        object_buffer,
+        object_bind_group,
+        object_uniform_stride,
+        meshes: HashMap::new(),
+        models: HashMap::new(),
+        mesh_handle_counter: 0,
         materials,
         egui_ctx,
         egui_renderer,
         egui_state,
         chunk_builder,
-        entity_builder,
     }
 }
 
 impl Renderer {
+    pub fn remove_mesh(&mut self, handle: &MeshHandle) {
+        self.meshes.remove(handle);
+    }
+
+    pub fn contains_model(&self, handle: &ModelHandle) -> bool {
+        self.models.contains_key(handle)
+    }
+
+    pub fn insert_model(&mut self, handle: ModelHandle, model: ModelAsset) {
+        self.models.insert(handle, model);
+    }
+
     pub fn material_layers(&self) -> Vec<[u32; 6]> {
         self.materials.iter().map(|m| m.0).collect()
+    }
+
+    fn build_commands(&self, instances: &[&RenderInstance], stack: &mut Vec<RenderCommandGpu>) {
+        for instance in instances {
+            match instance.handle() {
+                RenderHandle::Mesh(mesh) => {
+                    if let Some(mesh_asset) = self.meshes.get(&mesh) {
+                        mesh_asset.build(instance, stack);
+                    }
+                }
+                RenderHandle::Model(model) => {
+                    if let Some(model_asset) = self.models.get(&model) {
+                        model_asset.build(instance, stack);
+                    }
+                }
+            }
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -392,10 +401,13 @@ impl Renderer {
     pub fn render(
         &mut self,
         window: &Window,
-        meshes: &[&MeshGpu],
+        instances: &[&RenderInstance],
         view_proj: [[f32; 4]; 4],
         debug_overlay: &DebugOverlayData,
     ) {
+        let mut commands = Vec::new();
+        self.build_commands(instances, &mut commands);
+
         let raw_input = self.egui_state.take_egui_input(window);
         let full_output = self.egui_ctx.run_ui(raw_input, |ctx| {
             draw_debug_overlay(ctx, debug_overlay);
@@ -459,16 +471,51 @@ impl Renderer {
 
             rpass.set_pipeline(&self.pipeline);
             rpass.set_bind_group(0, &self.camera_bind_group, &[]);
-            rpass.set_bind_group(1, &self.texture_bind_group, &[]);
+            rpass.set_bind_group(2, &self.texture_bind_group, &[]);
 
-            for mesh in meshes {
-                if mesh.index_count == 0 {
+            let draw_count = commands.len().min(MAX_DRAW_OBJECTS as usize);
+            if draw_count < commands.len() {
+                tracing::warn!(
+                    "draw list truncated: {} commands, max {}",
+                    commands.len(),
+                    MAX_DRAW_OBJECTS
+                );
+            }
+
+            if draw_count != 0 {
+                let stride = self.object_uniform_stride as usize;
+                let mut object_upload = vec![0u8; draw_count * stride];
+
+                for (draw_idx, command) in commands.iter().take(draw_count).enumerate() {
+                    let start = draw_idx * stride;
+                    let object_uniform = ObjectUniform {
+                        transform: command.transform,
+                    };
+
+                    let uniform_bytes = bytes_of(&object_uniform);
+                    object_upload[start..start + uniform_bytes.len()]
+                        .copy_from_slice(uniform_bytes);
+                }
+
+                self.queue
+                    .write_buffer(&self.object_buffer, 0, &object_upload);
+            }
+
+            for (draw_idx, command) in commands.iter().take(draw_count).enumerate() {
+                let Some(asset) = self.meshes.get(&command.mesh) else {
+                    continue;
+                };
+
+                if asset.mesh.index_count == 0 {
                     continue;
                 }
 
-                rpass.set_vertex_buffer(0, self.vertex_buffer_slice(mesh));
-                rpass.set_index_buffer(mesh.index_buffer.slice(..), IndexFormat::Uint32);
-                rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                let object_offset = (draw_idx as u64 * self.object_uniform_stride) as u32;
+                rpass.set_bind_group(1, &self.object_bind_group, &[object_offset]);
+
+                rpass.set_vertex_buffer(0, self.vertex_buffer_slice(&asset.mesh));
+                rpass.set_index_buffer(asset.mesh.index_buffer.slice(..), IndexFormat::Uint32);
+                rpass.draw_indexed(0..asset.mesh.index_count, 0, 0..1);
             }
         }
 
@@ -523,23 +570,7 @@ impl Renderer {
         mesh.vertex_buffer.slice(..)
     }
 
-    /// Send voxel data to the GPU and get a handle to a renderable mesh.
-    pub fn upload_voxels(&self, voxels: &[Material], size_xyz: [usize; 3]) -> MeshGpu {
-        self.upload_voxels_with_offset(voxels, size_xyz, [0.0, 0.0, 0.0])
-    }
-
-    /// Send voxel data to the GPU and bake a world-space offset into all vertices.
-    pub fn upload_voxels_with_offset(
-        &self,
-        voxels: &[Material],
-        size_xyz: [usize; 3],
-        offset: [f32; 3],
-    ) -> MeshGpu {
-        let cpu_mesh = build_cpu_mesh(voxels, size_xyz, offset, &self.material_layers());
-        self.upload_cpu_mesh(cpu_mesh)
-    }
-
-    pub fn upload_cpu_mesh(&self, cpu_mesh: MeshCpu) -> MeshGpu {
+    pub fn upload_mesh(&mut self, cpu_mesh: MeshCpu) -> MeshHandle {
         let MeshCpu { vertices, indices } = cpu_mesh;
 
         let vertex_buffer = self.device.create_buffer_init(&BufferInitDescriptor {
@@ -554,72 +585,132 @@ impl Renderer {
             usage: BufferUsages::INDEX,
         });
 
-        MeshGpu {
-            vertex_buffer,
-            index_buffer,
-            index_count: indices.len() as u32,
-        }
+        let mesh_asset = MeshAsset {
+            mesh: MeshGpu {
+                vertex_buffer,
+                index_buffer,
+                index_count: indices.len() as u32,
+            },
+            // FIXME
+            material: MaterialTextures([0; 6]),
+        };
+
+        let handle = MeshHandle::from(self.mesh_handle_counter);
+        self.mesh_handle_counter += 1;
+
+        self.meshes.insert(handle, mesh_asset);
+
+        handle
     }
 
-    pub fn upload_cpu_mesh_rotated(
-        &self,
-        cpu_mesh: MeshCpu,
-        pivot: [f32; 3],
-        yaw: f32,
-        pitch: f32,
-    ) -> MeshGpu {
-        self.upload_cpu_mesh(cpu_mesh.rotate_about(pivot, yaw, pitch))
+    pub fn cube(&mut self) -> MeshHandle {
+        let mut vertices = Vec::with_capacity(24);
+        let mut indices = Vec::with_capacity(36);
+
+        let mut push_face =
+            |positions: [[f32; 3]; 4], normal: [f32; 3], material: u32, plus: bool| {
+                let base = vertices.len() as u32;
+
+                let uvs = [[0.0, 1.0], [1.0, 1.0], [0.0, 0.0], [1.0, 0.0]];
+                for i in 0..4 {
+                    vertices.push(Vertex {
+                        position: positions[i],
+                        normal,
+                        uv: uvs[i],
+                        material,
+                    });
+                }
+
+                if plus {
+                    indices.extend_from_slice(&[
+                        base,
+                        base + 2,
+                        base + 1,
+                        base + 2,
+                        base + 3,
+                        base + 1,
+                    ]);
+                } else {
+                    indices.extend_from_slice(&[
+                        base,
+                        base + 1,
+                        base + 2,
+                        base + 2,
+                        base + 1,
+                        base + 3,
+                    ]);
+                }
+            };
+
+        push_face(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 1.0, 1.0],
+            ],
+            [1.0, 0.0, 0.0],
+            0,
+            true,
+        );
+        push_face(
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 1.0],
+            ],
+            [-1.0, 0.0, 0.0],
+            0,
+            false,
+        );
+        push_face(
+            [
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            [0.0, 1.0, 0.0],
+            0,
+            true,
+        );
+        push_face(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+            ],
+            [0.0, -1.0, 0.0],
+            0,
+            false,
+        );
+        push_face(
+            [
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            [0.0, 0.0, 1.0],
+            0,
+            false,
+        );
+        push_face(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+            ],
+            [0.0, 0.0, -1.0],
+            0,
+            true,
+        );
+
+        self.upload_mesh(MeshCpu { vertices, indices })
     }
-}
-
-fn build_cpu_mesh(
-    voxels: &[Material],
-    size_xyz: [usize; 3],
-    offset: [f32; 3],
-    material_layers: &[[u32; 6]],
-) -> MeshCpu {
-    let (vertices, indices) = build_mesh_geometry(voxels, size_xyz, offset, material_layers);
-
-    MeshCpu { vertices, indices }
-}
-
-fn rotate_cpu_mesh(mesh: &mut MeshCpu, pivot: [f32; 3], yaw: f32, pitch: f32) {
-    for vertex in &mut mesh.vertices {
-        vertex.position = rotate_point(vertex.position, pivot, yaw, pitch);
-        vertex.normal = rotate_direction(vertex.normal, yaw, pitch);
-    }
-}
-
-fn rotate_point(point: [f32; 3], pivot: [f32; 3], yaw: f32, pitch: f32) -> [f32; 3] {
-    let relative = [
-        point[0] - pivot[0],
-        point[1] - pivot[1],
-        point[2] - pivot[2],
-    ];
-    let rotated = rotate_direction(relative, yaw, pitch);
-
-    [
-        rotated[0] + pivot[0],
-        rotated[1] + pivot[1],
-        rotated[2] + pivot[2],
-    ]
-}
-
-fn rotate_direction(vector: [f32; 3], yaw: f32, pitch: f32) -> [f32; 3] {
-    let (sin_pitch, cos_pitch) = pitch.sin_cos();
-    let pitch_rotated = [
-        vector[0],
-        vector[1] * cos_pitch + vector[2] * sin_pitch,
-        -vector[1] * sin_pitch + vector[2] * cos_pitch,
-    ];
-
-    let (sin_yaw, cos_yaw) = yaw.sin_cos();
-
-    [
-        pitch_rotated[0] * cos_yaw + pitch_rotated[2] * sin_yaw,
-        pitch_rotated[1],
-        -pitch_rotated[0] * sin_yaw + pitch_rotated[2] * cos_yaw,
-    ]
 }
 
 fn make_depth_texture(device: &Device, width: u32, height: u32) -> Texture {

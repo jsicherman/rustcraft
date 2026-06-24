@@ -4,8 +4,10 @@ pub struct DebugOverlayData {
     pub player_pos: [f32; 3],
     pub yaw_radians: f32,
     pub pitch_radians: f32,
-    pub index_count: u32,
-    pub entity_index_count: u32,
+    pub vertex_count: u32,
+    pub chunk_count: u32,
+    pub mesh_count: u32,
+    pub model_count: u32,
     pub entity_count: u32,
     pub frame_time_ms: u128,
 }
@@ -24,9 +26,11 @@ pub fn draw(ctx: &Context, data: &DebugOverlayData) {
                 data.yaw_radians.to_degrees(),
                 data.pitch_radians.to_degrees(),
             ));
-            ui.label(format!("Indices {}", data.index_count));
-            ui.label(format!("Entity Indices {}", data.entity_index_count));
+            ui.label(format!("Mesh Count {}", data.mesh_count));
+            ui.label(format!("Model Count {}", data.model_count));
             ui.label(format!("Entity Count {}", data.entity_count));
+            ui.label(format!("Chunk Count {}", data.chunk_count));
+            ui.label(format!("Vertex Count {}", data.vertex_count));
             ui.label(format!("Frame {} ms", data.frame_time_ms));
         });
 }

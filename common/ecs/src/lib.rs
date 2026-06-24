@@ -1,10 +1,11 @@
 pub mod movement;
 
 use bevy_ecs::{bundle::Bundle, component::Component};
+use render::model::ModelHandle;
 use serde::{Deserialize, Serialize};
 use spatial::{
     orientation::Orientation,
-    vectors::{Global, Vec3f},
+    vectors::{Global, Vec3f, Vec4f},
 };
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -16,6 +17,41 @@ pub struct MovementIntent {
     fly: bool,
     sprint: bool,
     sneak: bool,
+}
+
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EntityModel {
+    model_id: ModelHandle,
+    animation_state: AnimationState,
+    transform: EntityTransform,
+}
+
+impl EntityModel {
+    pub fn model(&self) -> ModelHandle {
+        self.model_id
+    }
+
+    pub fn animation_state(&self) -> AnimationState {
+        self.animation_state
+    }
+
+    pub fn transform(&self) -> EntityTransform {
+        self.transform
+    }
+}
+
+#[derive(Default, Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EntityTransform {
+    translation: Vec3f<Global>,
+    rotation: Vec4f<Global>,
+    scale: Vec3f<Global>,
+}
+
+#[derive(Default, Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnimationState {
+    #[default]
+    Idle,
+    Walking,
 }
 
 #[derive(Component, Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -86,6 +122,7 @@ pub struct SimulatedEntityBundle {
     pub velocity: EntityVelocity,
     pub movement_intent: MovementIntent,
     pub collider: BoxCollider,
+    pub model: EntityModel,
     pub collision_status: CollisionStatus,
 }
 
@@ -97,6 +134,7 @@ impl Default for SimulatedEntityBundle {
             movement_intent: MovementIntent::default(),
             velocity: EntityVelocity::default(),
             collider: BoxCollider::default(),
+            model: EntityModel::default(),
             collision_status: CollisionStatus::Airborne,
         }
     }

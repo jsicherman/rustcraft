@@ -1,5 +1,5 @@
 [package]
-authors = ["Jordan Sicherman <jordan.sicherman@gmail.com.com>"]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com>"]
 description = "ECS code"
 edition = "2024"
 name = "ecs"
@@ -9,6 +9,7 @@ version = "0.1.0"
 [dependencies]
 block = { path = "../block" }
 chunk = { path = "../chunk" }
+render = { path = "../../render" }
 spatial = { path = "../spatial" }
 
 bevy_ecs.workspace = true

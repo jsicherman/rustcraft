@@ -1,22 +1,21 @@
 pub mod camera;
+mod chunk;
 mod event_handler;
+mod frame_handler;
 mod key_handler;
+mod renderer;
 pub mod settings;
 pub mod world;
 
-use crate::{
-    camera::Camera,
-    settings::AppConfig,
-    world::{ChunkCache, ClientRenderable, EntityCache},
-};
-use block::{BlockId, BlockRegistry};
-use chunk::Chunk;
-use ecs::{BoxCollider, Entity, EntityOrientation, EntityPosition, MovementIntent, World};
-use protocol::{NetworkId, PROTOCOL_ID, RENDER_DISTANCE_SQ};
-use render::{DebugOverlayData, Renderer};
+use crate::{camera::Camera, renderer::RenderState, settings::AppConfig, world::ChunkCache};
+use block::BlockRegistry;
+use ecs::{Entity, EntityOrientation, MovementIntent, World};
+use model::ModelDefinition;
+use protocol::{NetworkId, PROTOCOL_ID};
+use render::Renderer;
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
-use spatial::vectors::{Global, IntoSpace, Vec2iChunk, Vec3fGlobal};
+use spatial::vectors::Vec2iChunk;
 use std::{
     collections::{HashMap, HashSet},
     net::{SocketAddr, UdpSocket},
@@ -58,18 +57,24 @@ pub struct AppState {
 
     block_registry: BlockRegistry,
 
-    loaded_chunks: ChunkCache,
-    loaded_entities: EntityCache,
+    chunk_state: ChunkCache,
+    entity_state: RenderState,
 
     camera: Camera,
     world: World,
-    local_player_network_id: Option<NetworkId>,
 
+    local_player: Option<(NetworkId, Option<Entity>)>,
     network_to_local: HashMap<NetworkId, Entity>,
 
     pressed_keys: HashSet<KeyCode>,
-    last_sent_intent: Option<MovementIntent>,
-    last_sent_orientation: Option<EntityOrientation>,
+
+    previous_state: PreviousState,
+}
+
+#[derive(Default)]
+pub struct PreviousState {
+    pub intent: Option<MovementIntent>,
+    pub orientation: Option<EntityOrientation>,
 }
 
 impl ApplicationHandler for App {
@@ -84,7 +89,13 @@ impl ApplicationHandler for App {
         );
 
         let block_registry = BlockRegistry::load();
-        let renderer = pollster::block_on(render::init(Arc::clone(&window), &block_registry));
+
+        let mut renderer = pollster::block_on(render::init(Arc::clone(&window), &block_registry));
+
+        let cube_mesh = renderer.cube();
+        for definition in ModelDefinition::iter() {
+            renderer.insert_model(definition.handle(), definition.build(cube_mesh));
+        }
 
         let client = RenetClient::new(Default::default());
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
@@ -113,23 +124,20 @@ impl ApplicationHandler for App {
             camera,
             client,
             transport,
-            local_player_network_id: None,
+            local_player: None,
             world,
             block_registry,
-            loaded_chunks: Default::default(),
-            loaded_entities: Default::default(),
+            chunk_state: Default::default(),
+            entity_state: Default::default(),
             network_to_local: Default::default(),
             pressed_keys: Default::default(),
-            last_sent_intent: None,
-            last_sent_orientation: None,
+            previous_state: Default::default(),
             last_update: Instant::now(),
         });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(state) = &mut self.state else { return };
-
-        // state.window.set_cursor_visible(false);
 
         let event_consumed = state.renderer.handle_window_event(&state.window, &event);
 
@@ -193,202 +201,22 @@ impl ApplicationHandler for App {
                 let (position, orientation) = state.process_inputs(dt);
                 let chunk_position = Vec2iChunk::from(position);
 
-                state.receive_chunks(chunk_position);
-                state.request_chunks(chunk_position);
+                state.receive_chunk_messages(chunk_position);
+                state.receive_entity_messages(position);
 
-                state.receive_entities(chunk_position);
-                state.request_entities(position);
+                state.request_chunk_frames(chunk_position);
+                state.request_entity_frames(position);
+                state.receive_chunk_frames(chunk_position);
 
-                let mut active_meshes = Vec::new();
-
-                active_meshes.extend(
-                    state
-                        .loaded_chunks
-                        .chunks
-                        .values()
-                        .filter_map(ClientRenderable::meshes),
-                );
-
-                let total_indices: u32 = active_meshes.iter().map(|mesh| mesh.index_count()).sum();
-
-                active_meshes.extend(
-                    state
-                        .loaded_entities
-                        .entities
-                        .values()
-                        .filter_map(ClientRenderable::meshes),
-                );
-
-                let total_indices_with_entities: u32 =
-                    active_meshes.iter().map(|mesh| mesh.index_count()).sum();
-                let total_entity_meshes = total_indices_with_entities - total_indices;
+                state.render_frame(position, orientation, dt);
 
                 state.transport.send_packets(&mut state.client).ok();
-
-                let size = state.window.inner_size();
-
-                state
-                    .camera
-                    .set_aspect(size.width as f32 / size.height as f32);
-
-                let vp = state.camera.view_projection(position, orientation);
-
-                let debug_overlay = DebugOverlayData {
-                    player_pos: position.into(),
-                    yaw_radians: orientation.yaw(),
-                    pitch_radians: orientation.pitch(),
-                    index_count: total_indices,
-                    entity_index_count: total_entity_meshes,
-                    entity_count: state.loaded_entities.entities.len() as u32,
-                    frame_time_ms: dt.as_millis(),
-                };
-
-                state.renderer.render(
-                    &state.window,
-                    &active_meshes,
-                    vp.map(std::convert::Into::into),
-                    &debug_overlay,
-                );
-
                 state.window.request_redraw();
             }
             WindowEvent::Resized(size) => {
                 state.renderer.resize(size.width, size.height);
             }
             _ => {}
-        }
-    }
-}
-
-impl AppState {
-    fn request_entities(&mut self, my_position: Vec3fGlobal) {
-        let my_chunk = Vec2iChunk::from(my_position);
-
-        for (id, client_entity) in self.loaded_entities.entities.iter_mut() {
-            // Don't render the local player
-            if Some(*id) == self.local_player_network_id {
-                continue;
-            }
-
-            if client_entity.is_queued()
-                || (client_entity.has_meshes() && !client_entity.is_dirty())
-            {
-                continue;
-            }
-
-            let Some(local) = self.network_to_local.get(id) else {
-                continue;
-            };
-
-            let Ok((their_position, their_collider)) = self
-                .world
-                .entity(*local)
-                .get_components::<(&EntityPosition, &BoxCollider)>()
-            else {
-                continue;
-            };
-
-            let their_chunk = Vec2iChunk::from(their_position.0);
-            if (their_chunk - my_chunk).length_sq() > RENDER_DISTANCE_SQ {
-                continue;
-            }
-
-            client_entity.queue_mesh();
-
-            let voxels = vec![BlockId::Missing as u32; their_collider.0.volume()];
-            let corner_position = their_position.0
-                - Vec3fGlobal::new(
-                    their_collider.0.half_width(),
-                    0.0,
-                    their_collider.0.half_width(),
-                );
-            self.renderer.entity_builder.enqueue(
-                id.0,
-                voxels,
-                [
-                    (their_collider.0.half_width() * 2.0).ceil() as usize,
-                    their_collider.0.height().ceil() as usize,
-                    (their_collider.0.half_width() * 2.0).ceil() as usize,
-                ],
-                corner_position.into(),
-            );
-        }
-
-        for result in self.renderer.entity_builder.collect_results() {
-            let network_id = NetworkId(result.key);
-
-            let Some(client_entity) = self.loaded_entities.entities.get_mut(&network_id) else {
-                continue;
-            };
-
-            let Some(local) = self.network_to_local.get(&network_id) else {
-                continue;
-            };
-
-            let Ok((their_position, their_orientation)) = self
-                .world
-                .entity(*local)
-                .get_components::<(&EntityPosition, &EntityOrientation)>()
-            else {
-                continue;
-            };
-
-            let their_chunk = Vec2iChunk::from(their_position.0);
-            if (their_chunk - my_chunk).length_sq() > RENDER_DISTANCE_SQ {
-                client_entity.unqueue_mesh();
-                continue;
-            }
-
-            let gpu_mesh = self.renderer.upload_cpu_mesh_rotated(
-                result.mesh,
-                [
-                    their_position.0.x(),
-                    their_position.0.y(),
-                    their_position.0.z(),
-                ],
-                their_orientation.0.yaw(),
-                their_orientation.0.pitch(),
-            );
-            client_entity.provide_mesh(gpu_mesh);
-        }
-    }
-
-    fn request_chunks(&mut self, position: Vec2iChunk) {
-        for (coordinate, client_chunk) in self.loaded_chunks.chunks.iter_mut() {
-            if client_chunk.has_meshes() || client_chunk.is_queued() {
-                continue;
-            }
-
-            if (*coordinate - position).length_sq() > RENDER_DISTANCE_SQ {
-                continue;
-            }
-
-            client_chunk.queue_mesh();
-
-            let voxels: Vec<_> = client_chunk.iter().map(|b| b as u32).collect();
-            let global = IntoSpace::<Global>::into_space(*coordinate);
-            self.renderer.chunk_builder.enqueue(
-                (coordinate.x(), coordinate.z()),
-                voxels,
-                Chunk::CHUNK_COLUMN,
-                [global.x() as f32, 0.0, global.z() as f32],
-            );
-        }
-
-        for result in self.renderer.chunk_builder.collect_results() {
-            let coordinate = Vec2iChunk::from(result.key);
-
-            let Some(client_chunk) = self.loaded_chunks.chunks.get_mut(&coordinate) else {
-                continue;
-            };
-
-            if (coordinate - position).length_sq() > RENDER_DISTANCE_SQ {
-                client_chunk.unqueue_mesh();
-                continue;
-            }
-
-            let gpu_mesh = self.renderer.upload_cpu_mesh(result.mesh);
-            client_chunk.provide_mesh(gpu_mesh);
         }
     }
 }

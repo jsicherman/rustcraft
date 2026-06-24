@@ -9,5 +9,6 @@ pub const SEA_LEVEL: usize = 64;
 
 /// Edge length of a chunk
 pub const CHUNK_SIZE: usize = 16;
+pub const CHUNK_SIZE_SQ: usize = CHUNK_SIZE * CHUNK_SIZE;
 /// Number of blocks in a chunk
 pub const CHUNK_VOLUME: usize = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;

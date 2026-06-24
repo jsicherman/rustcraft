@@ -30,8 +30,8 @@ pub struct GameServer<G: WorldGenerator> {
     world: GameWorld<G>,
     chunks: ChunkMap,
     block_registry: BlockRegistry,
-    entities: HashMap<u64, Entity>,
-    entities_inverted: HashMap<Entity, u64>,
+    entities: HashMap<NetworkId, Entity>,
+    entities_inverted: HashMap<Entity, NetworkId>,
     client_states: ClientStates,
     chunk_sweep_timer: Duration,
     stacks: SharedStacks,
@@ -40,15 +40,15 @@ pub struct GameServer<G: WorldGenerator> {
 #[derive(Default)]
 struct SharedStacks {
     movement: HashMap<Entity, MoveBundle>,
-    chunk_receivers: Vec<u64>,
+    chunk_receivers: Vec<(NetworkId, Entity)>,
 }
 
 const CHUNK_SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct ClientStates {
-    sent_chunks: HashMap<u64, HashSet<Vec2iChunk>>,
-    player_positions: HashMap<u64, Vec2iChunk>,
+    sent_chunks: HashMap<NetworkId, HashSet<Vec2iChunk>>,
+    player_positions: HashMap<NetworkId, Vec2iChunk>,
 }
 
 impl<G: WorldGenerator> GameServer<G> {
@@ -104,13 +104,19 @@ impl<G: WorldGenerator> GameServer<G> {
         );
         self.emit_entities();
 
-        self.sweep_chunks(dt);
+        let swept = self.sweep_chunks(dt);
+        if swept > 0 {
+            tracing::debug!(
+                "Chunk cleanup: {swept} ({} currently loaded)",
+                self.chunks.chunk_count(),
+            );
+        }
 
         self.transport.send_packets(&mut self.server);
         Ok(())
     }
 
-    fn sweep_chunks(&mut self, dt: Duration) {
+    fn sweep_chunks(&mut self, dt: Duration) -> usize {
         self.chunk_sweep_timer += dt;
         if self.chunk_sweep_timer >= CHUNK_SWEEP_INTERVAL {
             self.chunk_sweep_timer = Duration::ZERO;
@@ -124,24 +130,32 @@ impl<G: WorldGenerator> GameServer<G> {
 
             if !positions.is_empty() {
                 self.world
-                    .unload_distant_chunks(&mut self.chunks, &positions, 2 * RENDER_DISTANCE);
+                    .unload_distant_chunks(&mut self.chunks, &positions, 2 * RENDER_DISTANCE)
+            } else {
+                0
             }
+        } else {
+            0
         }
     }
 
     fn emit_entities(&mut self) {
         for (moved, move_bundle) in self.stacks.movement.drain() {
-            let Some(entity_id) = self.entities_inverted.get(&moved) else {
+            let Some(&entity_id) = self.entities_inverted.get(&moved) else {
                 tracing::warn!("Entity moved but has no network id");
                 continue;
             };
 
             let origin_chunk = Vec2iChunk::from(move_bundle.position());
 
+            self.client_states
+                .player_positions
+                .insert(entity_id, origin_chunk);
+
             let move_msg = match (move_bundle.velocity(), move_bundle.collision()) {
                 (Some(velocity), Some(collision_status)) => {
                     let move_msg = ServerMessage::EntityMove {
-                        entity_id: NetworkId(*entity_id),
+                        entity_id,
                         position: EntityPosition(move_bundle.position()),
                         velocity,
                         collision_status,
@@ -154,7 +168,7 @@ impl<G: WorldGenerator> GameServer<G> {
 
             let look_msg = move_bundle.orientation().map(|orientation| {
                 let look_msg = ServerMessage::EntityLook {
-                    entity_id: NetworkId(*entity_id),
+                    entity_id,
                     orientation,
                 };
 
@@ -169,11 +183,11 @@ impl<G: WorldGenerator> GameServer<G> {
             {
                 if let Some(entity_move) = move_msg.clone() {
                     self.server
-                        .send_message(*client_id, CHANNEL_ENTITIES, entity_move);
+                        .send_message(**client_id, CHANNEL_ENTITIES, entity_move);
                 }
                 if let Some(entity_look) = look_msg.clone() {
                     self.server
-                        .send_message(*client_id, CHANNEL_ENTITIES, entity_look);
+                        .send_message(**client_id, CHANNEL_ENTITIES, entity_look);
                 }
             }
         }
@@ -184,19 +198,18 @@ impl<G: WorldGenerator> GameServer<G> {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
                     let bundle = SimulatedEntityBundle::default();
+                    let client_id = NetworkId(client_id);
 
-                    let entity = self
-                        .world
-                        .spawn(
-                            &mut self.server,
-                            self.entities
-                                .keys()
-                                .copied()
-                                .chain(std::iter::once(client_id)),
-                            NetworkId(client_id),
-                            bundle,
-                        )?
-                        .id();
+                    let (entity_mut, position) = self.world.spawn(
+                        &mut self.server,
+                        self.entities
+                            .keys()
+                            .copied()
+                            .chain(std::iter::once(client_id)),
+                        client_id,
+                        bundle,
+                    )?;
+                    let entity = entity_mut.id();
 
                     self.entities.insert(client_id, entity);
                     self.entities_inverted.insert(entity, client_id);
@@ -205,16 +218,16 @@ impl<G: WorldGenerator> GameServer<G> {
                         .sent_chunks
                         .insert(client_id, Default::default());
 
-                    self.sync_existing_entities(client_id)?;
-
-                    self.broadcast_chunks(client_id)?;
+                    self.sync_existing_entities(client_id, position)?;
+                    self.broadcast_chunks(client_id, position)?;
                 }
                 ServerEvent::ClientDisconnected { client_id, .. } => {
+                    let client_id = NetworkId(client_id);
                     if let Some(entity) = self.entities.remove(&client_id) {
                         self.world.despawn(
                             &mut self.server,
                             self.entities.keys().copied(),
-                            NetworkId(client_id),
+                            client_id,
                             entity,
                         );
                         self.entities_inverted.remove(&entity);
@@ -230,7 +243,8 @@ impl<G: WorldGenerator> GameServer<G> {
 
     fn receive_messages(&mut self) -> Result<(), Error> {
         for client_id in self.server.clients_id() {
-            let Some(entity) = self.entities.get_mut(&client_id) else {
+            let network_id = NetworkId(client_id);
+            let Some(entity) = self.entities.get_mut(&network_id) else {
                 continue;
             };
 
@@ -247,7 +261,7 @@ impl<G: WorldGenerator> GameServer<G> {
                         };
                         *current_intent = intent;
 
-                        self.stacks.chunk_receivers.push(client_id);
+                        self.stacks.chunk_receivers.push((network_id, *entity));
                     }
                     ClientMessage::Look(orientation) => {
                         let Some(mut current_orientation) =
@@ -262,14 +276,14 @@ impl<G: WorldGenerator> GameServer<G> {
 
                         *current_orientation = orientation;
 
-                        let Some(&position) = self.world.world().get::<EntityPosition>(*entity)
+                        let Some(&origin_chunk) =
+                            self.client_states.player_positions.get(&network_id)
                         else {
                             continue;
                         };
 
-                        let origin_chunk = Vec2iChunk::from(position.0);
                         let msg = ServerMessage::EntityLook {
-                            entity_id: NetworkId(client_id),
+                            entity_id: network_id,
                             orientation,
                         }
                         .encode()?;
@@ -279,101 +293,88 @@ impl<G: WorldGenerator> GameServer<G> {
                             .player_positions
                             .iter()
                             // don't replay the look message back to the client that sent it
-                            .filter(|(observer_id, _)| *observer_id != &client_id)
+                            .filter(|(observer_id, _)| *observer_id != &network_id)
                             .filter(|(_, chunk)| {
                                 (**chunk - origin_chunk).length_sq() <= RENDER_DISTANCE_SQ
                             })
                         {
                             self.server
-                                .send_message(*observer_id, CHANNEL_ENTITIES, msg.clone());
+                                .send_message(**observer_id, CHANNEL_ENTITIES, msg.clone());
                         }
                     }
                 }
             }
         }
 
-        while let Some(client_id) = self.stacks.chunk_receivers.pop() {
-            self.broadcast_chunks(client_id)?;
+        while let Some((client_id, entity)) = self.stacks.chunk_receivers.pop() {
+            let Some(position) = self.world.world().get::<EntityPosition>(entity).copied() else {
+                continue;
+            };
+
+            self.broadcast_chunks(client_id, position)?;
         }
 
         Ok(())
     }
 
-    fn sync_existing_entities(&mut self, client_id: u64) -> Result<(), Error> {
-        let Some(observer_entity) = self.entities.get(&client_id).copied() else {
-            return Ok(());
-        };
+    /// Tell a newly connected client about all existing entities within render distance
+    fn sync_existing_entities(
+        &mut self,
+        client_id: NetworkId,
+        position: EntityPosition,
+    ) -> Result<(), Error> {
+        let msg = ServerMessage::ClientSpawned(client_id).encode()?;
+        self.server.send_message(*client_id, CHANNEL_ENTITIES, msg);
 
-        let msg = ServerMessage::ClientSpawned(NetworkId(client_id)).encode()?;
-        self.server.send_message(client_id, CHANNEL_ENTITIES, msg);
+        let observer_chunk = Vec2iChunk::from(position.0);
 
-        let Some(observer_position) = self
-            .world
-            .world()
-            .get::<EntityPosition>(observer_entity)
-            .copied()
-        else {
-            return Ok(());
-        };
+        for (other_client_id, position) in
+            self.entities
+                .iter()
+                .filter_map(|(other_client_id, other_entity)| {
+                    if *other_client_id == client_id {
+                        return None;
+                    }
 
-        let observer_chunk = Vec2iChunk::from(observer_position.0);
+                    let position = self
+                        .world
+                        .world()
+                        .get::<EntityPosition>(*other_entity)
+                        .copied()?;
+                    let other_chunk = Vec2iChunk::from(position.0);
 
-        let existing: Vec<(u64, EntityPosition)> = self
-            .entities
-            .iter()
-            .filter_map(|(other_client_id, other_entity)| {
-                if *other_client_id == client_id {
-                    return None;
-                }
+                    if (other_chunk - observer_chunk).length_sq() > RENDER_DISTANCE_SQ {
+                        return None;
+                    }
 
-                let position = self
-                    .world
-                    .world()
-                    .get::<EntityPosition>(*other_entity)
-                    .copied()?;
-                let other_chunk = Vec2iChunk::from(position.0);
-
-                if (other_chunk - observer_chunk).length_sq() > RENDER_DISTANCE_SQ {
-                    return None;
-                }
-
-                Some((*other_client_id, position))
-            })
-            .collect();
-
-        for (other_client_id, position) in existing {
+                    Some((*other_client_id, position))
+                })
+        {
             let msg = ServerMessage::EntitySpawn {
-                entity_id: NetworkId(other_client_id),
+                entity_id: other_client_id,
                 position,
             }
             .encode()?;
 
-            self.server.send_message(client_id, CHANNEL_ENTITIES, msg);
+            self.server.send_message(*client_id, CHANNEL_ENTITIES, msg);
         }
 
         Ok(())
     }
 
-    fn broadcast_chunks(&mut self, client_id: u64) -> Result<(), Error> {
-        let Some(entity) = self.entities.get(&client_id).copied() else {
-            return Ok(());
-        };
-
-        let Some(position) = self.world.world().get::<EntityPosition>(entity).copied() else {
-            return Ok(());
-        };
-
+    /// Broadcast the chunks around a client to that client, given their position
+    fn broadcast_chunks(
+        &mut self,
+        client_id: NetworkId,
+        position: EntityPosition,
+    ) -> Result<(), Error> {
         let origin_chunk = Vec2iChunk::from(position.0);
-
-        self.client_states
-            .player_positions
-            .insert(client_id, origin_chunk);
         self.send_nearby_chunks(client_id, origin_chunk, RENDER_DISTANCE)
     }
 
     fn send_nearby_chunks(
         &mut self,
-        client_id: u64,
+        client_id: NetworkId,
         coordinate: Vec2iChunk,
         max_distance: i32,
     ) -> Result<(), Error> {
@@ -394,7 +395,7 @@ impl<G: WorldGenerator> GameServer<G> {
                 let chunk = self.world.generate(&mut self.chunks, coordinate).to_owned();
                 let msg = ServerMessage::ChunkData(Box::new(chunk)).encode()?;
 
-                self.server.send_message(client_id, CHANNEL_CHUNKS, msg);
+                self.server.send_message(*client_id, CHANNEL_CHUNKS, msg);
                 sent.insert(coordinate);
             }
         }
