@@ -8,6 +8,10 @@ struct ObjectUniform {
     mat_layers_02: vec4<u32>,
 }
 
+struct LightingUniform {
+    sun_direction_and_strength: vec4<f32>,
+}
+
 @group(0) @binding(0)
 var<uniform> camera: Camera;
 
@@ -18,6 +22,9 @@ var<uniform> object: ObjectUniform;
 var tex_array: texture_2d_array<f32>;
 @group(2) @binding(1)
 var samp: sampler;
+
+@group(3) @binding(0)
+var<uniform> lighting: LightingUniform;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -47,6 +54,13 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let use_override = object.mat_layers_01[0] == 1u;
     let layer = select(in.material, object.mat_layers_01[1], use_override);
+    let albedo = textureSampleLevel(tex_array, samp, in.uv, layer, 0.0);
 
-    return textureSampleLevel(tex_array, samp, in.uv, layer, 0.0);
+    let sun_dir = normalize(lighting.sun_direction_and_strength.xyz);
+    let sun_strength = lighting.sun_direction_and_strength.w;
+    let direct_light = max(dot(normalize(in.normal), sun_dir), 0.0) * sun_strength;
+    let ambient = mix(0.03, 0.10, sun_strength);
+    let light = ambient + direct_light * (1.0 - ambient);
+
+    return vec4<f32>(albedo.rgb * light, albedo.a);
 }

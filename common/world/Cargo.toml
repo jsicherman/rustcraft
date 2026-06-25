@@ -1,0 +1,10 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com>"]
+description = "World/environment code"
+edition = "2024"
+name = "world"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+serde.workspace = true

@@ -14,10 +14,12 @@ entity = { path = "../common/entity" }
 model = { path = "../common/model" }
 protocol = { path = "../common/protocol" }
 spatial = { path = "../common/spatial" }
+world = { path = "../common/world" }
 
 anyhow.workspace = true
 bevy_ecs.workspace = true
 noise.workspace = true
 renet.workspace = true
 renet_netcode.workspace = true
+serde.workspace = true
 tracing.workspace = true

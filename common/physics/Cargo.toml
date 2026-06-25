@@ -1,0 +1,12 @@
+[package]
+authors = ["Jordan Sicherman <jordan.sicherman@gmail.com>"]
+description = "Physics code"
+edition = "2024"
+name = "physics"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+spatial = { path = "../spatial" }
+
+serde.workspace = true

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
-use block::BlockRegistry;
+use block::TexturePack;
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use egui::{Context, ViewportId};
 use egui_wgpu::ScreenDescriptor;
@@ -21,17 +21,36 @@ use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 use winit::{event::WindowEvent, window::Window};
+use world::TimeOfDay;
 
 use crate::{
+    OverlayParticle,
     VoxelMesher,
-    debug_overlay::{DebugOverlayData, draw as draw_debug_overlay},
+    debug::{DebugOverlayData, draw as draw_debug_overlay},
     mesher::Vertex,
     model::{
         Asset, MeshAsset, MeshHandle, ModelAsset, ModelHandle, RenderCommandGpu, RenderHandle,
         RenderInstance,
     },
+    overlay,
     texture::{MaterialTextures, build_texture_array},
 };
+
+struct Skybox {
+    pipeline: RenderPipeline,
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
+    index_count: u32,
+    camera_buffer: Buffer,
+    camera_bind_group: BindGroup,
+    color_buffer: Buffer,
+    bind_group: BindGroup,
+}
+
+struct Lighting {
+    buffer: Buffer,
+    bind_group: BindGroup,
+}
 
 pub struct Renderer {
     device: Device,
@@ -39,6 +58,8 @@ pub struct Renderer {
     surface: Surface<'static>,
     surface_config: SurfaceConfiguration,
     pipeline: RenderPipeline,
+    skybox: Skybox,
+    lighting: Lighting,
     texture_bind_group: BindGroup,
     camera_buffer: Buffer,
     camera_bind_group: BindGroup,
@@ -77,10 +98,75 @@ struct CameraUniform {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct SkyboxUniform {
+    sky_color: [f32; 4],
+    sun_direction: [f32; 4],
+    moon_params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LightingUniform {
+    sun_direction_and_strength: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct ObjectUniform {
     transform: [[f32; 4]; 4],
     mat_layers_0: [u32; 4],
     mat_layers_1: [u32; 4],
+}
+
+fn lerp(a: &[f32; 3], b: &[f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn calculate_sky_color(time_of_day: TimeOfDay) -> [f32; 3] {
+    const NIGHT_COLOR: [f32; 3] = [0.02, 0.05, 0.08];
+    const SUNRISE_COLOR: [f32; 3] = [1.00, 0.60, 0.20];
+    const DAY_COLOR: [f32; 3] = [0.53, 0.81, 0.92];
+    const SUNSET_COLOR: [f32; 3] = [1.00, 0.40, 0.10];
+
+    let t = time_of_day.0;
+
+    if t < 0.13 {
+        NIGHT_COLOR
+    } else if t < 0.25 {
+        let progress = (t - 0.13) / 0.12;
+        lerp(&NIGHT_COLOR, &SUNRISE_COLOR, progress)
+    } else if t < 0.35 {
+        let progress = (t - 0.25) / 0.10;
+        lerp(&SUNRISE_COLOR, &DAY_COLOR, progress)
+    } else if t < 0.65 {
+        DAY_COLOR
+    } else if t < 0.75 {
+        let progress = (t - 0.65) / 0.10;
+        lerp(&DAY_COLOR, &SUNSET_COLOR, progress)
+    } else if t < 0.90 {
+        let progress = (t - 0.75) / 0.15;
+        lerp(&SUNSET_COLOR, &NIGHT_COLOR, progress)
+    } else {
+        NIGHT_COLOR
+    }
+}
+
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len_sq = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if len_sq <= f32::EPSILON {
+        [0.0, 1.0, 0.0]
+    } else {
+        let inv_len = 1.0 / len_sq.sqrt();
+        [v[0] * inv_len, v[1] * inv_len, v[2] * inv_len]
+    }
+}
+
+fn calculate_sunlight_strength(sun_direction: [f32; 3]) -> f32 {
+    sun_direction[1].max(0.0)
 }
 
 impl Vertex {
@@ -114,7 +200,7 @@ impl Vertex {
     }
 }
 
-pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Renderer {
+pub async fn init(window: Arc<Window>, block_registry: &TexturePack) -> Renderer {
     let size = window.inner_size();
 
     let instance = Instance::default();
@@ -246,6 +332,37 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
         ],
     });
 
+    let lighting_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("lighting bgl"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: NonZeroU64::new(std::mem::size_of::<LightingUniform>() as u64),
+            },
+            count: None,
+        }],
+    });
+
+    let lighting_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("lighting"),
+        contents: cast_slice(&[LightingUniform {
+            sun_direction_and_strength: [0.0, 1.0, 0.0, 1.0],
+        }]),
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+    });
+
+    let lighting_bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("lighting bg"),
+        layout: &lighting_bgl,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: lighting_buffer.as_entire_binding(),
+        }],
+    });
+
     let depth_texture = make_depth_texture(&device, size.width, size.height);
 
     let shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -255,7 +372,12 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
 
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("pipeline layout"),
-        bind_group_layouts: &[Some(&camera_bgl), Some(&object_bgl), Some(&texture_bgl)],
+        bind_group_layouts: &[
+            Some(&camera_bgl),
+            Some(&object_bgl),
+            Some(&texture_bgl),
+            Some(&lighting_bgl),
+        ],
         immediate_size: 0,
     });
 
@@ -328,12 +450,200 @@ pub async fn init(window: Arc<Window>, block_registry: &BlockRegistry) -> Render
 
     let chunk_builder = VoxelMesher::new(material_layers);
 
+    let skybox_shader = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some("skybox shader"),
+        source: ShaderSource::Wgsl(include_str!("../shaders/skybox.wgsl").into()),
+    });
+
+    let skybox_color_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("skybox color bgl"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: NonZeroU64::new(std::mem::size_of::<SkyboxUniform>() as u64),
+            },
+            count: None,
+        }],
+    });
+
+    let skybox_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some("skybox pipeline layout"),
+        bind_group_layouts: &[Some(&camera_bgl), Some(&skybox_color_bgl)],
+        immediate_size: 0,
+    });
+
+    let skybox_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: Some("skybox pipeline"),
+        layout: Some(&skybox_pipeline_layout),
+        vertex: VertexState {
+            module: &skybox_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 3]>() as u64,
+                step_mode: VertexStepMode::Vertex,
+                attributes: &[VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: VertexFormat::Float32x3,
+                }],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(FragmentState {
+            module: &skybox_shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(ColorTargetState {
+                format: surface_format,
+                blend: Some(BlendState::REPLACE),
+                write_mask: ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: PrimitiveState {
+            topology: PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(DepthStencilState {
+            format: TextureFormat::Depth32Float,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(CompareFunction::LessEqual),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    const SKYBOX_VERTICES: [[f32; 3]; 24] = [
+        // Back face
+        [-1.0, -1.0, -1.0],
+        [1.0, -1.0, -1.0],
+        [1.0, 1.0, -1.0],
+        [-1.0, 1.0, -1.0],
+        // Front face
+        [-1.0, -1.0, 1.0],
+        [1.0, -1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [-1.0, 1.0, 1.0],
+        // Left face
+        [-1.0, -1.0, -1.0],
+        [-1.0, -1.0, 1.0],
+        [-1.0, 1.0, 1.0],
+        [-1.0, 1.0, -1.0],
+        // Right face
+        [1.0, -1.0, -1.0],
+        [1.0, -1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, -1.0],
+        // Bottom face
+        [-1.0, -1.0, -1.0],
+        [1.0, -1.0, -1.0],
+        [1.0, -1.0, 1.0],
+        [-1.0, -1.0, 1.0],
+        // Top face
+        [-1.0, 1.0, -1.0],
+        [1.0, 1.0, -1.0],
+        [1.0, 1.0, 1.0],
+        [-1.0, 1.0, 1.0],
+    ];
+
+    const SKYBOX_INDICES: [u32; 36] = [
+        // Back face
+        0, 2, 1, 0, 3, 2, // Front face
+        4, 5, 6, 4, 6, 7, // Left face
+        8, 10, 9, 8, 11, 10, // Right face
+        12, 13, 14, 12, 14, 15, // Bottom face
+        16, 17, 18, 16, 18, 19, // Top face
+        20, 22, 21, 20, 23, 22,
+    ];
+
+    let skybox_vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("skybox vertex buffer"),
+        contents: bytemuck::cast_slice(&SKYBOX_VERTICES),
+        usage: BufferUsages::VERTEX,
+    });
+
+    let skybox_index_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("skybox index buffer"),
+        contents: bytemuck::cast_slice(&SKYBOX_INDICES),
+        usage: BufferUsages::INDEX,
+    });
+
+    let skybox_camera_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("skybox camera"),
+        contents: cast_slice(&[CameraUniform {
+            view_proj: [[0.0; 4]; 4],
+        }]),
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+    });
+
+    let skybox_camera_bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("skybox camera bg"),
+        layout: &camera_bgl,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: skybox_camera_buffer.as_entire_binding(),
+        }],
+    });
+
+    let initial_sky_color = calculate_sky_color(TimeOfDay::new(0.5));
+    let skybox_color_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("skybox color buffer"),
+        contents: cast_slice(&[SkyboxUniform {
+            sky_color: [
+                initial_sky_color[0],
+                initial_sky_color[1],
+                initial_sky_color[2],
+                0.0,
+            ],
+            sun_direction: [0.0, 1.0, 0.0, 1.0],
+            moon_params: [0.22, 0.0, 0.0, 0.0],
+        }]),
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+    });
+
+    let skybox_bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("skybox bind group"),
+        layout: &skybox_color_bgl,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::Buffer(BufferBinding {
+                buffer: &skybox_color_buffer,
+                offset: 0,
+                size: NonZeroU64::new(std::mem::size_of::<SkyboxUniform>() as u64),
+            }),
+        }],
+    });
+
+    let skybox = Skybox {
+        pipeline: skybox_pipeline,
+        vertex_buffer: skybox_vertex_buffer,
+        index_buffer: skybox_index_buffer,
+        index_count: SKYBOX_INDICES.len() as u32,
+        camera_buffer: skybox_camera_buffer,
+        camera_bind_group: skybox_camera_bind_group,
+        color_buffer: skybox_color_buffer,
+        bind_group: skybox_bind_group,
+    };
+
+    let lighting = Lighting {
+        buffer: lighting_buffer,
+        bind_group: lighting_bind_group,
+    };
+
     Renderer {
         device,
         queue,
         surface,
         surface_config,
         pipeline,
+        skybox,
+        lighting,
         camera_buffer,
         camera_bind_group,
         depth_texture,
@@ -400,20 +710,27 @@ impl Renderer {
         self.egui_state.on_window_event(window, event).consumed
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         stack: &mut Vec<RenderCommandGpu>,
         window: &Window,
         instances: &[&RenderInstance],
-        view_proj: [[f32; 4]; 4],
+        view_matrices: ([[f32; 4]; 4], [[f32; 4]; 4]),
+        target_position_normal: Option<([f32; 3], [f32; 3])>,
+        overlay_particles: &[OverlayParticle],
         debug_overlay: &DebugOverlayData,
+        time_of_day: TimeOfDay,
     ) {
+        let (view_proj, skybox_view_proj) = view_matrices;
+
         stack.clear();
 
         self.build_commands(instances, stack);
 
         let raw_input = self.egui_state.take_egui_input(window);
         let full_output = self.egui_ctx.run_ui(raw_input, |ctx| {
+            overlay::foreground_overlays(ctx, target_position_normal, view_proj, overlay_particles);
             draw_debug_overlay(ctx, debug_overlay);
         });
         self.egui_state
@@ -422,10 +739,44 @@ impl Renderer {
             .egui_ctx
             .tessellate(full_output.shapes, full_output.pixels_per_point);
 
+        let sky_color = calculate_sky_color(time_of_day);
+        let sun_direction = normalize3(time_of_day.sun_direction());
+        let sunlight_strength = calculate_sunlight_strength(sun_direction);
+        self.queue.write_buffer(
+            &self.skybox.color_buffer,
+            0,
+            cast_slice(&[SkyboxUniform {
+                sky_color: [sky_color[0], sky_color[1], sky_color[2], 0.0],
+                sun_direction: [sun_direction[0], sun_direction[1], sun_direction[2], 1.0],
+                moon_params: [0.22, 0.0, 0.0, 0.0],
+            }]),
+        );
+
+        self.queue.write_buffer(
+            &self.lighting.buffer,
+            0,
+            cast_slice(&[LightingUniform {
+                sun_direction_and_strength: [
+                    sun_direction[0],
+                    sun_direction[1],
+                    sun_direction[2],
+                    sunlight_strength,
+                ],
+            }]),
+        );
+
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
             cast_slice(&[CameraUniform { view_proj }]),
+        );
+
+        self.queue.write_buffer(
+            &self.skybox.camera_buffer,
+            0,
+            cast_slice(&[CameraUniform {
+                view_proj: skybox_view_proj,
+            }]),
         );
 
         let frame = match self.surface.get_current_texture() {
@@ -473,9 +824,21 @@ impl Renderer {
                 ..Default::default()
             });
 
+            // Render skybox
+            {
+                rpass.set_pipeline(&self.skybox.pipeline);
+                rpass.set_bind_group(0, &self.skybox.camera_bind_group, &[]);
+                rpass.set_bind_group(1, &self.skybox.bind_group, &[]);
+                rpass.set_vertex_buffer(0, self.skybox.vertex_buffer.slice(..));
+                rpass.set_index_buffer(self.skybox.index_buffer.slice(..), IndexFormat::Uint32);
+                rpass.draw_indexed(0..self.skybox.index_count, 0, 0..1);
+            }
+
+            // Render voxels
             rpass.set_pipeline(&self.pipeline);
             rpass.set_bind_group(0, &self.camera_bind_group, &[]);
             rpass.set_bind_group(2, &self.texture_bind_group, &[]);
+            rpass.set_bind_group(3, &self.lighting.bind_group, &[]);
 
             let draw_count = stack.len().min(MAX_DRAW_OBJECTS as usize);
             if draw_count < stack.len() {

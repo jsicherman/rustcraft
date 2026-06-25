@@ -1,4 +1,5 @@
 use std::{
+    f32::consts::{FRAC_PI_2, PI, TAU},
     ops::{
         Bound::{Excluded, Included, Unbounded},
         Mul, RangeBounds,
@@ -45,13 +46,27 @@ pub struct Orientation {
     pitch: f32,
 }
 
+fn wrap_yaw(yaw: f32) -> f32 {
+    ((yaw + PI).rem_euclid(TAU)) - PI
+}
+fn wrap_pitch(pitch: f32) -> f32 {
+    let pitch = pitch.rem_euclid(TAU);
+    if pitch > FRAC_PI_2 && pitch <= PI + FRAC_PI_2 {
+        PI - pitch
+    } else if pitch > PI + FRAC_PI_2 {
+        pitch - TAU
+    } else {
+        pitch
+    }
+}
+
 impl Mul<[f32; 2]> for Orientation {
     type Output = Self;
 
     fn mul(self, rhs: [f32; 2]) -> Self::Output {
         Self::Output {
-            yaw: self.yaw * rhs[0],
-            pitch: self.pitch * rhs[1],
+            yaw: wrap_yaw(self.yaw * rhs[0]),
+            pitch: wrap_pitch(self.pitch * rhs[1]),
         }
     }
 }
@@ -59,8 +74,8 @@ impl Mul<[f32; 2]> for Orientation {
 impl Orientation {
     pub fn new(yaw_deg: f32, pitch_deg: f32) -> Self {
         Self {
-            yaw: yaw_deg.to_radians(),
-            pitch: pitch_deg.to_radians(),
+            yaw: wrap_yaw(yaw_deg.to_radians()),
+            pitch: wrap_pitch(pitch_deg.to_radians()),
         }
     }
 
@@ -72,8 +87,8 @@ impl Orientation {
     }
 
     pub fn yaw_pitch(&mut self, delta_yaw: f32, delta_pitch: f32) -> &mut Self {
-        self.yaw += delta_yaw;
-        self.pitch += delta_pitch;
+        self.yaw = wrap_yaw(self.yaw + delta_yaw);
+        self.pitch = wrap_pitch(self.pitch + delta_pitch);
         self
     }
 
@@ -85,28 +100,28 @@ impl Orientation {
         match yaw_range.start_bound() {
             Unbounded => {}
             Included(start_bound) | Excluded(start_bound) => {
-                self.yaw = self.yaw.max(*start_bound);
+                self.yaw = wrap_yaw(self.yaw.max(*start_bound));
             }
         }
 
         match yaw_range.end_bound() {
             Unbounded => {}
             Included(end_bound) | Excluded(end_bound) => {
-                self.yaw = self.yaw.min(*end_bound);
+                self.yaw = wrap_yaw(self.yaw.min(*end_bound));
             }
         }
 
         match pitch_range.start_bound() {
             Unbounded => {}
             Included(start_bound) | Excluded(start_bound) => {
-                self.pitch = self.pitch.max(*start_bound);
+                self.pitch = wrap_pitch(self.pitch.max(*start_bound));
             }
         }
 
         match pitch_range.end_bound() {
             Unbounded => {}
             Included(end_bound) | Excluded(end_bound) => {
-                self.pitch = self.pitch.min(*end_bound);
+                self.pitch = wrap_pitch(self.pitch.min(*end_bound));
             }
         }
 
@@ -169,16 +184,21 @@ impl Orientation {
         near: f32,
         far: f32,
     ) -> [Vec4f; 4] {
+        let view = self.view_matrix(eye);
+        let proj = perspective(aspect, fov_y_deg, near, far);
+
+        Vec4f::mat_mul(proj, view)
+    }
+
+    pub fn view_matrix(&self, eye: Vec3fGlobal) -> [Vec4f; 4] {
         let look_dir = self.look_direction();
         let center = eye + look_dir;
 
-        let view = look_at(eye, center, Vec3f::UP);
-        let proj = perspective(aspect, fov_y_deg, near, far);
-        Vec4f::mat_mul(proj, view)
+        look_at(eye, center, Vec3f::UP)
     }
 }
 
-fn look_at(eye: Vec3fGlobal, center: Vec3fGlobal, up: Vec3fGlobal) -> [Vec4f; 4] {
+pub fn look_at(eye: Vec3fGlobal, center: Vec3fGlobal, up: Vec3fGlobal) -> [Vec4f; 4] {
     let f = (center - eye).normalize();
     let s = f.cross(up).normalize();
     let u = s.cross(f);
@@ -191,7 +211,7 @@ fn look_at(eye: Vec3fGlobal, center: Vec3fGlobal, up: Vec3fGlobal) -> [Vec4f; 4]
     ]
 }
 
-fn perspective(aspect: f32, fov_y_deg: f32, near: f32, far: f32) -> [Vec4f; 4] {
+pub fn perspective(aspect: f32, fov_y_deg: f32, near: f32, far: f32) -> [Vec4f; 4] {
     let f = 1.0 / (fov_y_deg.to_radians() / 2.0).tan();
     let range = near - far;
 

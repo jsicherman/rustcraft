@@ -5,7 +5,7 @@ use std::{
 };
 
 use client::settings::load_config;
-use server::{DefaultWorldGenerator, GameServer, WorldGenerator};
+use server::{GameServer, WorldGeneration};
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -29,13 +29,13 @@ fn main() -> ExitCode {
 
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
 
-    tracing::info!("Starting dedicated server on {bind_addr} (public: {public_addr})...");
+    tracing::info!("Starting server on {bind_addr} (public: {public_addr})...");
 
     let mut server = match GameServer::new(
         bind_addr,
         public_addr,
         config.host.max_clients,
-        DefaultWorldGenerator::new(0),
+        WorldGeneration::new(config.world.generator, config.world.seed),
     ) {
         Ok(s) => s,
         Err(e) => {

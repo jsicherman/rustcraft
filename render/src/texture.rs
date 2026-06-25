@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Error};
-use block::{BlockRegistry, BlockTexture};
+use block::{BlockTexture, TexturePack};
 use wgpu::{
     AddressMode, Device, Extent3d, FilterMode, Origin3d, Queue, Sampler, SamplerDescriptor,
     TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
@@ -18,7 +18,6 @@ impl From<[u32; 6]> for MaterialTextures {
     }
 }
 
-#[expect(unused)]
 pub struct TextureArray {
     texture: Texture,
     view: TextureView,
@@ -37,7 +36,7 @@ impl TextureArray {
 pub fn build_texture_array(
     device: &Device,
     queue: &Queue,
-    registry: &BlockRegistry,
+    registry: &TexturePack,
 ) -> Result<(TextureArray, Vec<MaterialTextures>), Error> {
     let mut layer_of = HashMap::new();
     let mut paths = Vec::new();

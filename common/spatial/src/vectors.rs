@@ -866,6 +866,37 @@ where
     }
 }
 
+impl<S: CoordSpace> From<Vec3i<S>> for Vec2iChunk
+where
+    Vec3iGlobal: From<Vec3i<S>>,
+{
+    fn from(value: Vec3i<S>) -> Self {
+        let global = Vec3iGlobal::from(value);
+        let chunk = IntoSpace::<Chunk>::into_space(global);
+
+        Self::from([chunk.x, chunk.z])
+    }
+}
+
+impl<S: CoordSpace> From<Vec3f<S>> for Vec3iLocal
+where
+    Vec3fGlobal: From<Vec3f<S>>,
+{
+    fn from(value: Vec3f<S>) -> Self {
+        let global = Vec3fGlobal::from(value);
+        let global = Vec3iGlobal::from([global.x() as i32, global.y() as i32, global.z() as i32]);
+        let local = IntoSpace::<Local>::into_space(global);
+
+        Self::from([local.x, local.y, local.z])
+    }
+}
+
+impl<S: CoordSpace> From<Vec3f<S>> for Vec3i<S> {
+    fn from(value: Vec3f<S>) -> Self {
+        Self::new(value.x() as i32, value.y() as i32, value.z() as i32)
+    }
+}
+
 impl Aabb for Vec2iChunk {
     fn aabb<S: CoordSpace>(&self, position: Vec3f<S>) -> AxisAlignedBoundingBox<S> {
         let min = Vec3f::new(

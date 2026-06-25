@@ -9,51 +9,56 @@ use spatial::{
     vectors::{Global, Vec3f, Vec4f},
 };
 
+pub fn eye_position(base_position: Vec3f<Global>, eye_height: f32) -> Vec3f<Global> {
+    base_position + [0.0, eye_height, 0.0].into()
+}
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct MovementIntent {
-    forward: f32,
-    strafe: f32,
+    pub forward: f32,
+    pub strafe: f32,
 
-    jump: bool,
-    fly: bool,
-    sprint: bool,
-    sneak: bool,
+    pub jump: bool,
+    pub fly: bool,
+    pub sprint: bool,
+    pub sneak: bool,
+}
+
+impl MovementIntent {
+    pub const SNEAK_MODIFIER: f32 = 0.4;
+    pub const SPRINT_MODIFIER: f32 = 1.3;
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct InteractionIntent {
+    pub attack: bool,
+    pub interact: bool,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EntityModel {
-    model_id: ModelHandle,
-    animation_state: AnimationState,
-    transform: EntityTransform,
+    pub model_id: ModelHandle,
+    pub eye_height: f32,
+    pub animation_state: AnimationState,
+    pub transform: EntityTransform,
 }
 
 impl EntityModel {
     pub fn for_model(model: ModelDefinition) -> Self {
         Self {
             model_id: model.handle(),
+            eye_height: model.eye_height(),
             animation_state: AnimationState::Idle,
             transform: EntityTransform::default(),
         }
-    }
-
-    pub fn model(&self) -> ModelHandle {
-        self.model_id
-    }
-
-    pub fn animation_state(&self) -> AnimationState {
-        self.animation_state
-    }
-
-    pub fn transform(&self) -> EntityTransform {
-        self.transform
     }
 }
 
 #[derive(Default, Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EntityTransform {
-    translation: Vec3f<Global>,
-    rotation: Vec4f<Global>,
-    scale: Vec3f<Global>,
+    pub translation: Vec3f<Global>,
+    pub rotation: Vec4f<Global>,
+    pub scale: Vec3f<Global>,
 }
 
 #[derive(Default, Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,45 +88,6 @@ pub struct EntityPosition(pub Vec3f<Global>);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct EntityVelocity(pub Vec3f<Global>);
 
-impl MovementIntent {
-    pub fn new(
-        forward: f32,
-        strafe: f32,
-        jump: bool,
-        fly: bool,
-        sprint: bool,
-        sneak: bool,
-    ) -> Self {
-        Self {
-            forward,
-            strafe,
-            jump,
-            fly,
-            sprint,
-            sneak,
-        }
-    }
-
-    pub fn forward(&self) -> f32 {
-        self.forward
-    }
-    pub fn strafe(&self) -> f32 {
-        self.strafe
-    }
-    pub fn jump(&self) -> bool {
-        self.jump
-    }
-    pub fn sprint(&self) -> bool {
-        self.sprint
-    }
-    pub fn sneak(&self) -> bool {
-        self.sneak
-    }
-    pub fn fly(&self) -> bool {
-        self.fly
-    }
-}
-
 pub type World = bevy_ecs::world::World;
 pub type Entity = bevy_ecs::entity::Entity;
 
@@ -131,17 +97,20 @@ pub struct SimulatedEntityBundle {
     pub orientation: EntityOrientation,
     pub velocity: EntityVelocity,
     pub movement_intent: MovementIntent,
+    pub interaction_intent: InteractionIntent,
     pub collider: BoxCollider,
     pub model: EntityModel,
     pub collision_status: CollisionStatus,
 }
 
 impl SimulatedEntityBundle {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         position: EntityPosition,
         orientation: EntityOrientation,
         velocity: EntityVelocity,
         movement_intent: MovementIntent,
+        interaction_intent: InteractionIntent,
         collider: BoxCollider,
         model: EntityModel,
         collision_status: CollisionStatus,
@@ -151,6 +120,7 @@ impl SimulatedEntityBundle {
             orientation,
             velocity,
             movement_intent,
+            interaction_intent,
             collider,
             model,
             collision_status,

@@ -10,4 +10,9 @@ version = "0.1.0"
 block = { path = "../block" }
 spatial = { path = "../spatial" }
 
+anyhow.workspace = true
+bincode.workspace = true
 serde.workspace = true
+tracing.workspace = true
+xxhash-rust.workspace = true
+zstd.workspace = true

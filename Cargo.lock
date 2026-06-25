@@ -650,9 +650,14 @@ dependencies = [
 name = "chunk"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "bincode",
  "block",
  "serde",
  "spatial",
+ "tracing",
+ "xxhash-rust",
+ "zstd",
 ]
 
 [[package]]
@@ -675,6 +680,7 @@ dependencies = [
  "ecs",
  "entity",
  "model",
+ "physics",
  "pollster",
  "protocol",
  "rand 0.10.1",
@@ -683,11 +689,13 @@ dependencies = [
  "renet_netcode",
  "serde",
  "server",
+ "smallvec",
  "spatial",
  "toml",
  "tracing",
  "tracing-subscriber",
  "winit",
+ "world",
 ]
 
 [[package]]
@@ -2423,6 +2431,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "physics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "spatial",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2589,8 +2605,10 @@ dependencies = [
  "block",
  "chunk",
  "ecs",
+ "physics",
  "serde",
  "spatial",
+ "world",
  "zstd",
 ]
 
@@ -2882,6 +2900,7 @@ dependencies = [
  "tracing",
  "wgpu",
  "winit",
+ "world",
 ]
 
 [[package]]
@@ -3081,8 +3100,10 @@ dependencies = [
  "protocol",
  "renet",
  "renet_netcode",
+ "serde",
  "spatial",
  "tracing",
+ "world",
 ]
 
 [[package]]
@@ -4296,6 +4317,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
+name = "world"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "x11-dl"
 version = "2.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4357,6 +4385,12 @@ name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
 name = "y4m"

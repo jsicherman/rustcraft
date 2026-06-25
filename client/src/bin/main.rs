@@ -4,7 +4,7 @@ use std::{
 };
 
 use client::{App, settings::load_config};
-use server::{DefaultWorldGenerator, GameServer, WorldGenerator};
+use server::{GameServer, WorldGeneration};
 use winit::event_loop::EventLoop;
 
 fn main() -> ExitCode {
@@ -32,7 +32,7 @@ fn main() -> ExitCode {
             address,
             address,
             config.host.max_clients,
-            DefaultWorldGenerator::new(0),
+            WorldGeneration::new(config.world.generator, config.world.seed),
         )
         .unwrap();
 

@@ -1,32 +1,47 @@
-use std::path::Path;
+use std::{ops::Deref, path::Path};
 
 use entity::EntityType;
 use serde::{Deserialize, Serialize};
 
+pub const REACH_DISTANCE: f32 = 3.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum BlockId {
-    Air = 0,
-    Stone = 1,
-    Grass = 2,
-    Dirt = 3,
-}
+pub struct BlockId(pub u8);
 
 impl BlockId {
-    pub const MAX: usize = 4;
+    pub const MAX: u8 = 4;
+
+    pub fn iter() -> impl Iterator<Item = BlockId> {
+        (0..Self::MAX).map(BlockId)
+    }
+}
+
+impl Deref for BlockId {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum TextureId {
-    Missing = BlockId::MAX as u8,
-    Head = BlockId::MAX as u8 + 1,
-    LightPart = BlockId::MAX as u8 + 2,
-    DarkPart = BlockId::MAX as u8 + 3,
+pub struct TextureId(pub u8);
+
+impl Deref for TextureId {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl TextureId {
-    pub const MAX: usize = 4;
+    pub const MAX: u8 = 3;
+    pub const OFFSET: u8 = BlockId::MAX;
+
+    pub fn iter() -> impl Iterator<Item = TextureId> {
+        (0..Self::MAX).map(|id| TextureId(id + Self::OFFSET))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,13 +121,19 @@ impl BlockSolidity {
     }
 }
 
-// FIXME: clean up
-pub struct BlockRegistry {
+pub struct TexturePack {
     blocks: Vec<BlockType>,
     textures: Vec<BlockTexture>,
 }
 
-impl BlockRegistry {
+impl BlockId {
+    pub const AIR: Self = Self(0);
+    pub const STONE: Self = Self(1);
+    pub const GRASS: Self = Self(2);
+    pub const DIRT: Self = Self(3);
+}
+
+impl TexturePack {
     pub fn load() -> Self {
         let blocks = vec![
             BlockType {
@@ -156,10 +177,9 @@ impl BlockRegistry {
             },
         ];
 
-        assert_eq!(blocks.len(), BlockId::MAX);
+        assert_eq!(blocks.len(), BlockId::MAX as usize);
 
         let textures = vec![
-            BlockTexture::Uniform(Path::new("textures/missing.png")),
             BlockTexture::directional(
                 Path::new("textures/dirt.png"),
                 Path::new("textures/steve_shirt.png"),
@@ -172,7 +192,7 @@ impl BlockRegistry {
             BlockTexture::Uniform(Path::new("textures/steve_pants.png")),
         ];
 
-        assert_eq!(textures.len(), TextureId::MAX);
+        assert_eq!(textures.len(), TextureId::MAX as usize);
 
         Self { blocks, textures }
     }
@@ -180,22 +200,75 @@ impl BlockRegistry {
     pub fn get_textures(&self, entity: EntityType) -> &[TextureId] {
         match entity {
             EntityType::Human => &[
-                TextureId::Head,
-                TextureId::DarkPart,
-                TextureId::LightPart,
-                TextureId::LightPart,
-                TextureId::LightPart,
-                TextureId::LightPart,
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(2),
+                TextureId(2),
+                TextureId(2),
+            ],
+            EntityType::Horse => &[
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(2),
+                TextureId(1),
+            ],
+            EntityType::Snake => &[TextureId(0), TextureId(1), TextureId(2), TextureId(1)],
+            EntityType::Bird => &[
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(0),
+                TextureId(0),
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+            ],
+            EntityType::Giant => &[
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(2),
+                TextureId(1),
+                TextureId(3),
+                TextureId(2),
+            ],
+            EntityType::Slime => &[
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(0),
+                TextureId(3),
+                TextureId(2),
+                TextureId(1),
+            ],
+            EntityType::Spider => &[
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(0),
+                TextureId(1),
+                TextureId(2),
+                TextureId(3),
+                TextureId(2),
+                TextureId(1),
             ],
         }
     }
 
     pub fn get_texture(&self, id: TextureId) -> &BlockTexture {
-        self.textures.get(id as usize).unwrap()
+        self.textures.get(*id as usize).unwrap()
     }
 
     pub fn get_block_type(&self, id: BlockId) -> &BlockType {
-        self.blocks.get(id as usize).unwrap()
+        self.blocks.get(*id as usize).unwrap()
     }
 
     pub fn blocks(&self) -> impl Iterator<Item = &BlockType> {

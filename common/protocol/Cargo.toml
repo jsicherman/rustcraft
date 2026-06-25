@@ -10,7 +10,9 @@ version = "0.1.0"
 block = { path = "../block" }
 chunk = { path = "../chunk" }
 ecs = { path = "../ecs" }
+physics = { path = "../physics" }
 spatial = { path = "../spatial" }
+world = { path = "../world" }
 
 anyhow.workspace = true
 bincode.workspace = true

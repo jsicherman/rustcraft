@@ -1,29 +1,36 @@
+use chunk::ChunkProvider;
 use ecs::{
-    CollisionStatus, EntityOrientation, EntityPosition, EntityVelocity, SimulatedEntityBundle,
+    BoxCollider, CollisionStatus, EntityModel, EntityOrientation, EntityPosition, EntityVelocity,
+    SimulatedEntityBundle,
 };
 use protocol::{CHANNEL_CHUNKS, CHANNEL_ENTITIES, Packet, RENDER_DISTANCE_SQ, ServerMessage};
 use render::model::RenderHandle;
-use spatial::vectors::{Vec2iChunk, Vec3fGlobal};
+use smallvec::SmallVec;
+use spatial::vectors::{Chunk, IntoSpace, Vec2iChunk, Vec3fGlobal};
 
-use crate::{AppState, chunk::ClientChunk, renderer::NetworkRenderable};
+use crate::{AppState, renderer::NetworkRenderable};
 
 impl AppState {
     pub(crate) fn receive_chunk_messages(&mut self, chunk_position: Vec2iChunk) {
-        self.chunk_state.chunks.retain(|coord, chunk| {
+        let mut meshes_to_remove = SmallVec::<[_; 16]>::new();
+
+        self.chunk_state.retain_chunks(|coord, chunk| {
             let retained = (*coord - chunk_position).length_sq() <= RENDER_DISTANCE_SQ;
 
             if !retained && let Some(instance) = chunk.instance() {
                 let RenderHandle::Mesh(mesh) = instance.handle() else {
                     unreachable!();
                 };
-
-                // chunks are only singly-referenced, so drop the mesh when the chunk is unloaded
-                tracing::debug!("dropping mesh {mesh:?} for chunk {coord:?}");
-                self.renderer.remove_mesh(&mesh);
+                meshes_to_remove.push(mesh);
             }
 
             retained
         });
+
+        for mesh in meshes_to_remove {
+            // chunks are only singly-referenced, so drop the mesh when the chunk is unloaded
+            self.renderer.remove_mesh(&mesh);
+        }
 
         while let Some(msg) = self.client.receive_message(CHANNEL_CHUNKS) {
             let msg = ServerMessage::decode(&msg).unwrap();
@@ -36,27 +43,62 @@ impl AppState {
                         continue;
                     }
 
-                    self.chunk_state
-                        .chunks
-                        .insert(coordinate, ClientChunk::new(*chunk));
+                    self.chunk_state.insert_wire_chunk(chunk);
+                }
+                ServerMessage::BlockEdit {
+                    position,
+                    before,
+                    after,
+                } => {
+                    let chunk_coordinate = IntoSpace::<Chunk>::into_space(position);
+                    let coordinate = Vec2iChunk::from([chunk_coordinate[0], chunk_coordinate[2]]);
+
+                    if (coordinate - chunk_position).length_sq() > RENDER_DISTANCE_SQ {
+                        continue;
+                    }
+
+                    // FIXME: get this when you break it yourself
+                    if self
+                        .chunk_state
+                        .block(position.into())
+                        .map(|block| block.id())
+                        != Some(before)
+                    {
+                        tracing::warn!("mismatch at {position:?}: expected={before:?}");
+                    }
+
+                    if self.chunk_state.set_block(position.into(), after).is_none() {
+                        continue;
+                    }
+
+                    self.invalidate_chunk_meshes_around_block(position);
                 }
                 ServerMessage::EntityMove { .. }
                 | ServerMessage::EntityLook { .. }
                 | ServerMessage::EntitySpawn { .. }
                 | ServerMessage::EntityDespawn(_)
-                | ServerMessage::ClientSpawned(_) => {
+                | ServerMessage::ClientSpawned(_)
+                | ServerMessage::EntityRemodel { .. }
+                | ServerMessage::ParticleSpawn { .. }
+                | ServerMessage::ServerTime(_) => {
                     unreachable!()
                 }
             }
         }
     }
 
-    pub(crate) fn receive_entity_messages(&mut self, current_position: Vec3fGlobal) {
+    pub(crate) fn receive_entity_messages(&mut self, _current_position: Vec3fGlobal) {
         while let Some(msg) = self.client.receive_message(CHANNEL_ENTITIES) {
             let msg = ServerMessage::decode(&msg).unwrap();
 
             match msg {
-                ServerMessage::ChunkData(_) => unreachable!(),
+                ServerMessage::ChunkData(_) | ServerMessage::BlockEdit { .. } => unreachable!(),
+                ServerMessage::ServerTime(time) => {
+                    self.time_of_day = time;
+                }
+                ServerMessage::ParticleSpawn { emitter } => {
+                    self.particles.spawn(emitter);
+                }
                 ServerMessage::ClientSpawned(entity_id) => {
                     if let Some(entity) = self.network_to_local.get(&entity_id) {
                         self.local_player = Some((entity_id, Some(*entity)));
@@ -77,6 +119,7 @@ impl AppState {
                             Default::default(),
                             Default::default(),
                             Default::default(),
+                            Default::default(),
                             bounding_box,
                             model,
                             Default::default(),
@@ -91,7 +134,7 @@ impl AppState {
                     }
 
                     self.network_to_local.insert(entity_id, spawned_id);
-                    self.request_entity_frame(spawned_id, current_position);
+                    // self.request_entity_frame(spawned_id, current_position);
                 }
                 ServerMessage::EntityDespawn(entity_id) => {
                     if let Some(entity) = self.network_to_local.remove(&entity_id) {
@@ -145,7 +188,7 @@ impl AppState {
                     *client_velocity = velocity;
                     *client_collision_status = collision_status;
 
-                    self.request_entity_frame(*entity_id, current_position);
+                    // self.request_entity_frame(*entity_id, current_position);
                 }
                 ServerMessage::EntityLook {
                     entity_id,
@@ -163,7 +206,29 @@ impl AppState {
                         *client_orientation = orientation;
                     }
 
-                    self.request_entity_frame(*entity_id, current_position);
+                    // self.request_entity_frame(*entity_id, current_position);
+                }
+                ServerMessage::EntityRemodel {
+                    entity_id,
+                    model,
+                    bounding_box,
+                } => {
+                    let Some(entity_id) = self.network_to_local.get(&entity_id) else {
+                        continue;
+                    };
+
+                    let Ok(mut entity) = self.world.get_entity_mut(*entity_id) else {
+                        continue;
+                    };
+
+                    if let Ok((mut client_model, mut client_bounding_box)) =
+                        entity.get_components_mut::<(&mut EntityModel, &mut BoxCollider)>()
+                    {
+                        *client_model = model;
+                        *client_bounding_box = bounding_box;
+                    }
+
+                    // self.request_entity_frame(*entity_id, current_position);
                 }
             }
         }

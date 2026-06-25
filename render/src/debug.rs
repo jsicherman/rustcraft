@@ -10,6 +10,8 @@ pub struct DebugOverlayData {
     pub model_count: u32,
     pub entity_count: u32,
     pub frame_time_ms: u128,
+    pub average_frame_time_ms: u128,
+    pub time_of_day: f32,
 }
 
 pub fn draw(ctx: &Context, data: &DebugOverlayData) {
@@ -26,11 +28,13 @@ pub fn draw(ctx: &Context, data: &DebugOverlayData) {
                 data.yaw_radians.to_degrees(),
                 data.pitch_radians.to_degrees(),
             ));
-            ui.label(format!("Mesh Count {}", data.mesh_count));
-            ui.label(format!("Model Count {}", data.model_count));
-            ui.label(format!("Entity Count {}", data.entity_count));
-            ui.label(format!("Chunk Count {}", data.chunk_count));
-            ui.label(format!("Vertex Count {}", data.vertex_count));
-            ui.label(format!("Frame {} ms", data.frame_time_ms));
+            ui.label(format!("Meshes {}", data.mesh_count));
+            ui.label(format!("Models {}", data.model_count));
+            ui.label(format!("Entities {}", data.entity_count));
+            ui.label(format!("Chunks {}", data.chunk_count));
+            ui.label(format!("Vertices {}", data.vertex_count));
+            ui.label(format!("Last {} ms", data.frame_time_ms));
+            ui.label(format!("Average {} ms", data.average_frame_time_ms));
+            ui.label(format!("Time of Day {:.2} hours", data.time_of_day));
         });
 }

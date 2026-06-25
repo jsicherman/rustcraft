@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use block::BlockRegistry;
+use block::TexturePack;
 use chunk::{ChunkMap, ChunkProvider};
 use smallvec::SmallVec;
 use spatial::{
@@ -14,7 +14,7 @@ use crate::{
     MovementIntent, World,
 };
 
-const MOVE_SPEED: f32 = 5.0;
+const MOVE_SPEED: f32 = 4.2;
 const JUMP_VELOCITY: f32 = 6.3;
 const GRAVITY: f32 = -12.5;
 const TERMINAL_VELOCITY: f32 = -50.0;
@@ -86,9 +86,9 @@ pub fn apply_gravity(
 ) -> Vec3fGlobal {
     let is_grounded = collision_status == CollisionStatus::OnGround && velocity.y() <= 0.0;
 
-    if intent.jump() && (is_grounded || intent.fly()) {
+    if intent.jump && (is_grounded || intent.fly) {
         velocity += [0.0, JUMP_VELOCITY, 0.0].into();
-    } else if !is_grounded && !intent.fly() {
+    } else if !is_grounded && !intent.fly {
         velocity += [0.0, GRAVITY * dt.as_secs_f32(), 0.0].into();
         velocity.clamp((.., TERMINAL_VELOCITY.., ..));
     }
@@ -113,37 +113,42 @@ fn narrow_phase_aabb(
             )
         });
         let d = dd.map(|(left, right)| left.min(right));
-        let v = [
-            velocity.x().abs() + VELOCITY_EPSILON,
-            velocity.y().abs() + VELOCITY_EPSILON,
-            velocity.z().abs() + VELOCITY_EPSILON,
-        ];
+        let (axis, _) = d
+            .iter()
+            .copied()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or((1, d[1]));
 
-        let [sx, sy, sz] = [0, 1, 2].map(|idx| d[idx] / v[idx]);
-
-        let normal = if sx < sy && sx < sz {
-            if dd[0].0 < dd[0].1 {
-                Direction::PlusX
-            } else {
-                Direction::MinusX
+        let normal = match axis {
+            0 => {
+                if dd[0].0 < dd[0].1 {
+                    Direction::PlusX
+                } else {
+                    Direction::MinusX
+                }
             }
-        } else if sy < sz {
-            if dd[1].0 < dd[1].1 {
-                Direction::PlusY
-            } else {
-                Direction::MinusY
+            1 => {
+                if dd[1].0 < dd[1].1 {
+                    Direction::PlusY
+                } else {
+                    Direction::MinusY
+                }
             }
-        } else if dd[2].0 < dd[2].1 {
-            Direction::PlusZ
-        } else {
-            Direction::MinusZ
+            _ => {
+                if dd[2].0 < dd[2].1 {
+                    Direction::PlusZ
+                } else {
+                    Direction::MinusZ
+                }
+            }
         }
         .into();
 
         return Some(CollisionEvent {
             toi: Duration::ZERO,
             normal,
-            penetration: d.iter().copied().fold(f32::INFINITY, f32::min),
+            penetration: d[axis],
         });
     }
 
@@ -185,7 +190,7 @@ fn narrow_phase_aabb(
             .unwrap_or((idx, f32::NAN, f32::NAN))
         })
         .map(|(idx, entry_dist, exit_dist)| {
-            if !entry_dist.is_finite() && !exit_dist.is_finite() {
+            if entry_dist.is_nan() || exit_dist.is_nan() {
                 return (f32::NAN, f32::NAN);
             }
 
@@ -201,7 +206,7 @@ fn narrow_phase_aabb(
 
     if entries
         .iter()
-        .any(|(entry, exit)| !entry.is_finite() && !exit.is_finite())
+        .any(|(entry, exit)| entry.is_nan() || exit.is_nan())
     {
         return None;
     }
@@ -216,28 +221,43 @@ fn narrow_phase_aabb(
         },
     );
 
-    if entry_time > exit_time || entry_time < 0.0 || entry_time > dt_secs {
+    if entry_time > exit_time || exit_time < 0.0 || entry_time > dt_secs {
         return None;
     }
 
-    let normal = if entries[0].0 > entries[1].0 && entries[0].0 > entries[2].0 {
-        Vec3fGlobal::from(if velocity.x() > 0.0 {
+    let axis = {
+        let entry_times = [entries[0].0, entries[1].0, entries[2].0];
+        let abs_vel = [velocity.x().abs(), velocity.y().abs(), velocity.z().abs()];
+        let mut best = 0usize;
+        for idx in 1..3 {
+            let t_best = entry_times[best];
+            let t_cur = entry_times[idx];
+            if t_cur > t_best + VELOCITY_EPSILON
+                || ((t_cur - t_best).abs() <= VELOCITY_EPSILON
+                    && abs_vel[idx] > abs_vel[best] + VELOCITY_EPSILON)
+            {
+                best = idx;
+            }
+        }
+        best
+    };
+
+    let normal = match axis {
+        0 => Vec3fGlobal::from(if velocity.x() > 0.0 {
             Direction::MinusX
         } else {
             Direction::PlusX
-        })
-    } else if entries[1].0 > entries[2].0 {
-        Vec3fGlobal::from(if velocity.y() > 0.0 {
+        }),
+        1 => Vec3fGlobal::from(if velocity.y() > 0.0 {
             Direction::MinusY
         } else {
             Direction::PlusY
-        })
-    } else {
-        Vec3fGlobal::from(if velocity.z() > 0.0 {
+        }),
+        _ => Vec3fGlobal::from(if velocity.z() > 0.0 {
             Direction::MinusZ
         } else {
             Direction::PlusZ
-        })
+        }),
     };
 
     Some(CollisionEvent {
@@ -247,9 +267,54 @@ fn narrow_phase_aabb(
     })
 }
 
-const MOVE_EPSILON: f32 = 1e-3;
-const FILTER_EPSILON: f32 = 2e-3;
+const MOVE_EPSILON: f32 = 1e-4;
+const FILTER_EPSILON: f32 = 1e-4;
 const VELOCITY_EPSILON: f32 = 1e-6;
+const TOI_EPSILON: f32 = 1e-5;
+const GROUND_PROBE_EPSILON: f32 = 2e-4;
+const GROUND_VELOCITY_EPSILON: f32 = 1e-4;
+
+fn has_ground_support<CP: ChunkProvider>(
+    position: Vec3fGlobal,
+    bounding_box: BoxCollider,
+    chunks: &CP,
+    block_registry: &TexturePack,
+) -> bool {
+    let aabb = bounding_box.0.aabb(position);
+
+    let probe = AxisAlignedBoundingBox::new(
+        [
+            aabb.min().x(),
+            aabb.min().y() - GROUND_PROBE_EPSILON,
+            aabb.min().z(),
+        ]
+        .into(),
+        [aabb.max().x(), aabb.max().y(), aabb.max().z()].into(),
+    );
+
+    chunks.intersecting(&probe).any(|candidate| {
+        if !block_registry
+            .get_block_type(candidate.id())
+            .solidity()
+            .is_solid()
+        {
+            return false;
+        }
+
+        let candidate_aabb = candidate.aabb();
+        let x_overlap = aabb.max().x() > candidate_aabb.min().x() + MOVE_EPSILON
+            && aabb.min().x() < candidate_aabb.max().x() - MOVE_EPSILON;
+        let z_overlap = aabb.max().z() > candidate_aabb.min().z() + MOVE_EPSILON
+            && aabb.min().z() < candidate_aabb.max().z() - MOVE_EPSILON;
+
+        if !x_overlap || !z_overlap {
+            return false;
+        }
+
+        let foot_gap = aabb.min().y() - candidate_aabb.max().y();
+        (-MOVE_EPSILON..=GROUND_PROBE_EPSILON).contains(&foot_gap)
+    })
+}
 
 /// Collision detection and resolution for a single entity, based on its `Collider` and `Velocity`.
 pub fn apply_collision_aabb<CP: ChunkProvider>(
@@ -258,10 +323,10 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
     previous_status: CollisionStatus,
     velocity: Vec3fGlobal,
     chunks: &CP,
-    block_registry: &BlockRegistry,
+    block_registry: &TexturePack,
     dt: Duration,
 ) -> (Vec3fGlobal, Vec3fGlobal, CollisionStatus) {
-    const MAX_COLLISION_ITERATIONS: usize = 2;
+    const MAX_COLLISION_ITERATIONS: usize = 6;
     const GROUND_NORMAL_THRESHOLD: f32 = 0.7;
 
     let dt_secs = dt.as_secs_f32();
@@ -297,7 +362,7 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
             }
 
             let candidate_aabb = candidate.aabb();
-            if !aabb_swept.intersects_epsilon(&candidate_aabb, -FILTER_EPSILON) {
+            if !aabb_swept.intersects_epsilon(&candidate_aabb, FILTER_EPSILON) {
                 continue;
             }
 
@@ -326,14 +391,14 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
 
         let intersecting: SmallVec<[_; 4]> = collisions
             .iter()
-            .filter(|e| e.toi == Duration::ZERO && e.penetration > MOVE_EPSILON)
+            .filter(|e| e.toi.as_secs_f32() <= TOI_EPSILON && e.penetration > 0.0)
             .collect();
 
         if !intersecting.is_empty() {
             let mut handled_normals = SmallVec::<[_; 4]>::new();
             for event in &intersecting {
                 if !handled_normals.contains(&event.normal) {
-                    position += event.normal * event.penetration;
+                    position += event.normal * (event.penetration + MOVE_EPSILON);
                     let dot = velocity.dot(event.normal);
                     if dot < 0.0 {
                         velocity -= event.normal * dot;
@@ -349,28 +414,45 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
             continue;
         }
 
-        let event = collisions[0];
-
-        let toi_secs = event.toi.as_secs_f32();
-        if toi_secs > 0.0 {
-            position += velocity * toi_secs;
-            remaining_dt -= toi_secs;
+        let first_toi = collisions[0].toi.as_secs_f32().max(0.0);
+        if first_toi > 0.0 {
+            position += velocity * first_toi;
+            remaining_dt -= first_toi;
             remaining_dt = remaining_dt.max(0.0);
         }
 
-        let dot = velocity.dot(event.normal);
-        if dot < 0.0 {
-            velocity -= event.normal * dot;
-        }
-        if !resolved_normals.contains(&event.normal) {
-            resolved_normals.push(event.normal);
+        let simultaneous: SmallVec<[_; 4]> = collisions
+            .iter()
+            .filter(|event| (event.toi.as_secs_f32() - first_toi).abs() <= TOI_EPSILON)
+            .collect();
+
+        let mut handled_normals = SmallVec::<[_; 4]>::new();
+        for event in simultaneous {
+            if handled_normals.contains(&event.normal) {
+                continue;
+            }
+
+            position += event.normal * MOVE_EPSILON;
+
+            let dot = velocity.dot(event.normal);
+            if dot < 0.0 {
+                velocity -= event.normal * dot;
+            }
+
+            if !resolved_normals.contains(&event.normal) {
+                resolved_normals.push(event.normal);
+            }
+            handled_normals.push(event.normal);
         }
     }
 
-    let status = if resolved_normals
+    let grounded_by_collision = resolved_normals
         .iter()
-        .any(|n| n.y() > GROUND_NORMAL_THRESHOLD)
-    {
+        .any(|n| n.y() > GROUND_NORMAL_THRESHOLD);
+    let grounded_by_support = velocity.y() <= GROUND_VELOCITY_EPSILON
+        && has_ground_support(position, bounding_box, chunks, block_registry);
+
+    let status = if grounded_by_collision || grounded_by_support {
         CollisionStatus::OnGround
     } else {
         CollisionStatus::Airborne
@@ -393,18 +475,26 @@ pub fn apply_intent(
         return (position, velocity);
     }
 
+    let speed_multiplier = if intent.sneak {
+        MovementIntent::SNEAK_MODIFIER
+    } else if intent.sprint {
+        MovementIntent::SPRINT_MODIFIER
+    } else {
+        1.0
+    };
+
     let movement_offset = orientation.movement_offset(
-        MOVE_SPEED,
+        MOVE_SPEED * speed_multiplier,
         dt,
-        intent.forward(),
-        intent.strafe(),
-        intent.fly(),
+        intent.forward,
+        intent.strafe,
+        intent.fly,
     );
 
     velocity[0] = movement_offset.x() / dt_secs;
     velocity[2] = movement_offset.z() / dt_secs;
 
-    if intent.fly() {
+    if intent.fly {
         velocity[1] = movement_offset.y() / dt_secs;
     }
 
@@ -417,7 +507,7 @@ pub fn apply_intent_all(
     world: &mut World,
     stack: &mut HashMap<Entity, MoveBundle>,
     chunk_map: &ChunkMap,
-    block_registry: &BlockRegistry,
+    block_registry: &TexturePack,
     dt: Duration,
 ) {
     const BROADCAST_POS_TOLERANCE_SQ: f32 = 1e-2 * 1e-2;

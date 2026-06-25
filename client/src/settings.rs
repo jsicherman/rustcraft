@@ -1,11 +1,19 @@
 use std::path::Path;
 
 use serde::Deserialize;
+use server::WorldGeneratorType;
 
 #[derive(Default, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub host: HostConfig,
+    pub world: WorldSettings,
+    pub client: ClientSettings,
+}
+
+#[derive(Default, Deserialize)]
+pub struct ClientSettings {
+    pub entity: usize,
 }
 
 #[derive(Deserialize)]
@@ -18,6 +26,12 @@ pub struct ServerConfig {
 pub struct HostConfig {
     pub tps: u64,
     pub max_clients: usize,
+}
+
+#[derive(Default, Deserialize, Clone, Copy)]
+pub struct WorldSettings {
+    pub seed: u32,
+    pub generator: WorldGeneratorType,
 }
 
 impl Default for ServerConfig {

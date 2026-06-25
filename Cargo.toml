@@ -5,8 +5,10 @@ members = [
     "common/ecs",
     "common/entity",
     "common/model",
+    "common/physics",
     "common/protocol",
     "common/spatial",
+    "common/world",
     "client",
     "render",
     "server",
@@ -53,4 +55,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wgpu = "29.0"
 winit = "0.30"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
 zstd = { version = "0.13", default-features = false }

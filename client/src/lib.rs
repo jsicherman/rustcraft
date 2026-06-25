@@ -3,12 +3,17 @@ mod chunk;
 mod event_handler;
 mod frame_handler;
 mod key_handler;
+mod particles;
 mod renderer;
 pub mod settings;
 pub mod world;
 
-use crate::{camera::Camera, renderer::RenderState, settings::AppConfig, world::ChunkCache};
-use block::BlockRegistry;
+use crate::{
+    camera::Camera, particles::ParticleSystem, renderer::RenderState, settings::AppConfig,
+    world::ChunkCache,
+};
+use ::world::TimeOfDay;
+use block::TexturePack;
 use ecs::{Entity, EntityOrientation, MovementIntent, World};
 use entity::EntityType;
 use model::ModelDefinition;
@@ -25,8 +30,8 @@ use std::{
 };
 use winit::{
     application::ApplicationHandler,
-    dpi::PhysicalSize,
-    event::{ElementState, KeyEvent, WindowEvent},
+    dpi::{PhysicalPosition, PhysicalSize},
+    event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, PhysicalKey},
     window::{CursorGrabMode, Window, WindowId},
@@ -56,8 +61,9 @@ pub struct AppState {
     transport: NetcodeClientTransport,
 
     last_update: Instant,
+    frame_timer: FrameTimer,
 
-    block_registry: BlockRegistry,
+    texture_pack: TexturePack,
 
     chunk_state: ChunkCache,
     entity_state: RenderState,
@@ -69,14 +75,47 @@ pub struct AppState {
     network_to_local: HashMap<NetworkId, Entity>,
 
     pressed_keys: HashSet<KeyCode>,
+    pressed_mouse_buttons: HashSet<MouseButton>,
 
     previous_state: PreviousState,
+
+    time_of_day: TimeOfDay,
+    particles: ParticleSystem,
+}
+
+struct FrameTimer {
+    samples: [u128; 60],
+    index: usize,
+    count: usize,
+}
+
+impl Default for FrameTimer {
+    fn default() -> Self {
+        Self {
+            samples: [0; 60],
+            index: 0,
+            count: 0,
+        }
+    }
+}
+
+impl FrameTimer {
+    fn push(&mut self, dt: u128) {
+        self.samples[self.index] = dt;
+        self.index = (self.index + 1) % 60;
+        self.count = (self.count + 1).min(60);
+    }
+
+    fn avg(&self) -> u128 {
+        (self.samples[..self.count].iter().sum::<u128>() as f64 / self.count as f64) as u128
+    }
 }
 
 #[derive(Default)]
 pub struct PreviousState {
     pub intent: Option<MovementIntent>,
     pub orientation: Option<EntityOrientation>,
+    pub down: HashSet<MouseButton>,
 }
 
 impl ApplicationHandler for App {
@@ -89,16 +128,21 @@ impl ApplicationHandler for App {
                 )
                 .unwrap(),
         );
+        window
+            .set_cursor_grab(CursorGrabMode::Locked)
+            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+            .unwrap();
+        window.set_cursor_visible(false);
 
-        let block_registry = BlockRegistry::load();
+        let texture_pack = TexturePack::load();
 
-        let mut renderer = pollster::block_on(render::init(Arc::clone(&window), &block_registry));
+        let mut renderer = pollster::block_on(render::init(Arc::clone(&window), &texture_pack));
 
         let cube_mesh = renderer.cube();
-        for definition in ModelDefinition::iter() {
+        for (definition, entity_type) in ModelDefinition::iter().zip(EntityType::iter()) {
             renderer.insert_model(
                 definition.handle(),
-                definition.build(cube_mesh, block_registry.get_textures(EntityType::Human)),
+                definition.build(cube_mesh, texture_pack.get_textures(entity_type)),
             );
         }
 
@@ -131,15 +175,32 @@ impl ApplicationHandler for App {
             transport,
             local_player: None,
             world,
-            block_registry,
+            texture_pack,
             chunk_state: Default::default(),
             entity_state: Default::default(),
             network_to_local: Default::default(),
             pressed_keys: Default::default(),
+            pressed_mouse_buttons: Default::default(),
             previous_state: Default::default(),
             render_queue: Default::default(),
+            frame_timer: Default::default(),
             last_update: Instant::now(),
+            particles: Default::default(),
+            time_of_day: TimeOfDay::new(0.5),
         });
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        let Some(state) = &mut self.state else { return };
+
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            state.camera.handle_cursor_moved(dx, dy);
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -148,37 +209,27 @@ impl ApplicationHandler for App {
         let event_consumed = state.renderer.handle_window_event(&state.window, &event);
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::CursorEntered { .. } if !event_consumed => {
+            WindowEvent::Focused(true) => {
+                let size = state.window.inner_size();
+                let center = PhysicalPosition::new(size.width / 2, size.height / 2);
+                let _ = state.window.set_cursor_position(center);
+
                 state
                     .window
-                    .set_cursor_grab(CursorGrabMode::Confined)
-                    .unwrap();
+                    .set_cursor_grab(CursorGrabMode::Locked)
+                    .or_else(|_| state.window.set_cursor_grab(CursorGrabMode::Confined))
+                    .ok();
+                state.window.set_cursor_visible(false);
+                state.camera.reset_cursor_delta();
             }
-            WindowEvent::CursorLeft { .. } if !event_consumed => {
-                let _ = state.window.set_cursor_grab(CursorGrabMode::None);
+            WindowEvent::Focused(false) => {
+                state.window.set_cursor_grab(CursorGrabMode::None).ok();
+                state.window.set_cursor_visible(true);
             }
-            WindowEvent::CursorMoved { mut position, .. } if !event_consumed => {
-                let size = state.window.inner_size();
-
-                let width = size.width as f64;
-
-                let mut wrapped = false;
-                if position.x < 1.0 {
-                    wrapped = true;
-                    position.x = width - 4.0;
-                } else if position.x > width - 3.0 {
-                    wrapped = true;
-                    position.x = 2.0;
-                }
-
-                if wrapped {
-                    let _ = state.window.set_cursor_position(position);
-                    state.camera.reset_cursor_position(position.x, position.y);
-                } else {
-                    state.camera.handle_cursor_moved(position.x, position.y);
-                }
-            }
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CursorEntered { .. } if !event_consumed => {}
+            WindowEvent::CursorLeft { .. } if !event_consumed => {}
+            WindowEvent::CursorMoved { .. } if !event_consumed => {}
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -199,19 +250,41 @@ impl ApplicationHandler for App {
                     state.pressed_keys.remove(&key);
                 }
             },
+            WindowEvent::MouseInput {
+                state: element_state,
+                button,
+                ..
+            } if !event_consumed => {
+                if element_state.is_pressed() {
+                    state.pressed_mouse_buttons.insert(button);
+                } else {
+                    state.pressed_mouse_buttons.remove(&button);
+                }
+            }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 let dt = now - state.last_update;
+                state.frame_timer.push(dt.as_millis());
                 state.last_update = now;
 
-                let (position, orientation) = state.process_inputs(dt);
+                state.particles.tick(dt);
+
+                let (position, orientation, _) = state.process_inputs(dt);
+
                 let chunk_position = Vec2iChunk::from(position);
 
+                match state.transport.send_packets(&mut state.client) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::error!("Failed to send packets: {err}");
+                    }
+                }
                 state.receive_chunk_messages(chunk_position);
                 state.receive_entity_messages(position);
 
                 state.request_chunk_frames(chunk_position);
                 state.request_entity_frames(position);
+
                 state.receive_chunk_frames(chunk_position);
 
                 state.render_frame(position, orientation, dt);
