@@ -360,58 +360,37 @@ impl ChunkProvider for ChunkMap {
     ) -> Box<dyn Iterator<Item = Block<Global>> + 'a> {
         let mut blocks = Vec::new();
 
-        for coordinate in aabb.chunks() {
-            let Some(chunk) = self.chunks.get(&coordinate) else {
-                continue;
-            };
+        let min_x = aabb.min().x().floor() as i32;
+        let min_y = aabb.min().y().floor() as i32;
+        let min_z = aabb.min().z().floor() as i32;
 
-            for (slice_index, &hash) in chunk.section_hashes().iter().enumerate() {
-                let Some(section) = self.chunk_store.load(hash) else {
-                    continue;
-                };
+        let max_x = aabb.max().x().ceil() as i32;
+        let max_y = aabb.max().y().ceil() as i32;
+        let max_z = aabb.max().z().ceil() as i32;
 
-                match section.as_ref() {
-                    ChunkSection::Homogeneous(BlockId::AIR) => continue,
-                    ChunkSection::Homogeneous(id) => {
-                        for block_index in 0..Chunk::CHUNK_VOLUME {
-                            let x_local = block_index % Chunk::CHUNK_SIZE;
-                            let z_local = (block_index / Chunk::CHUNK_SIZE) % Chunk::CHUNK_SIZE;
-                            let y_local = block_index / (Chunk::CHUNK_SIZE * Chunk::CHUNK_SIZE);
-                            let world_y = slice_index * Chunk::CHUNK_SIZE + y_local;
+        let chunk_size = Chunk::CHUNK_SIZE as i32;
 
-                            let local =
-                                Vec3iLocal::from((x_local as i32, world_y as i32, z_local as i32));
-                            let global_position = local_to_global(local, coordinate);
-                            blocks.push(Block::new(*id, global_position));
-                        }
+        for y in min_y.max(0)..max_y.min(spatial::WORLD_HEIGHT as i32) {
+            for z in min_z..max_z {
+                for x in min_x..max_x {
+                    let chunk_coord =
+                        Vec2iChunk::from([x.div_euclid(chunk_size), z.div_euclid(chunk_size)]);
+                    let Some(chunk) = self.chunks.get(&chunk_coord) else {
+                        continue;
+                    };
+
+                    let local =
+                        Vec3iLocal::from([x.rem_euclid(chunk_size), y, z.rem_euclid(chunk_size)]);
+
+                    let Some(id) = chunk.get(&self.chunk_store, local) else {
+                        continue;
+                    };
+
+                    if id == BlockId::AIR {
+                        continue;
                     }
-                    ChunkSection::Heterogeneous(section_blocks) => {
-                        for (block_index, &id) in section_blocks.iter().enumerate() {
-                            let x_local = block_index % Chunk::CHUNK_SIZE;
-                            let z_local = (block_index / Chunk::CHUNK_SIZE) % Chunk::CHUNK_SIZE;
-                            let y_local = block_index / (Chunk::CHUNK_SIZE * Chunk::CHUNK_SIZE);
-                            let world_y = slice_index * Chunk::CHUNK_SIZE + y_local;
 
-                            let local =
-                                Vec3iLocal::from((x_local as i32, world_y as i32, z_local as i32));
-                            let global_position = local_to_global(local, coordinate);
-                            blocks.push(Block::new(id, global_position));
-                        }
-                    }
-                    ChunkSection::Palette { palette, indices } => {
-                        for block_index in 0..Chunk::CHUNK_VOLUME {
-                            let id = palette[indices.get(block_index) as usize];
-                            let x_local = block_index % Chunk::CHUNK_SIZE;
-                            let z_local = (block_index / Chunk::CHUNK_SIZE) % Chunk::CHUNK_SIZE;
-                            let y_local = block_index / (Chunk::CHUNK_SIZE * Chunk::CHUNK_SIZE);
-                            let world_y = slice_index * Chunk::CHUNK_SIZE + y_local;
-
-                            let local =
-                                Vec3iLocal::from((x_local as i32, world_y as i32, z_local as i32));
-                            let global_position = local_to_global(local, coordinate);
-                            blocks.push(Block::new(id, global_position));
-                        }
-                    }
+                    blocks.push(Block::new(id, local_to_global(local, chunk_coord)));
                 }
             }
         }

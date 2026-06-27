@@ -271,6 +271,15 @@ impl Packet for ClientMessage {
     fn receive_channels() -> Vec<u8> {
         vec![CHANNEL_GAMEPLAY_RELIABLE, CHANNEL_MOVEMENT_STREAM]
     }
+
+    fn encode(self) -> Result<Vec<u8>, Error> {
+        bincode::serde::encode_to_vec(self, bincode::config::standard()).map_err(Into::into)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self::Output, Error> {
+        let (value, _) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())?;
+        Ok(value)
+    }
 }
 impl Packet for EntityMessage {
     type Output = ServerMessage;
@@ -298,18 +307,11 @@ impl Packet for EntityMessage {
 
     fn encode(self) -> Result<Vec<u8>, Error> {
         let msg = ServerMessage::Entity(self);
-
-        let serialized = bincode::serde::encode_to_vec(msg, bincode::config::standard())?;
-        let compressed = zstd::encode_all(serialized.as_slice(), 0)?;
-
-        Ok(compressed)
+        bincode::serde::encode_to_vec(msg, bincode::config::standard()).map_err(Into::into)
     }
 
     fn decode(bytes: &[u8]) -> Result<Self::Output, Error> {
-        let decompressed = zstd::decode_all(bytes)?;
-
-        let (value, _) =
-            bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())?;
+        let (value, _) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())?;
 
         Ok(value)
     }

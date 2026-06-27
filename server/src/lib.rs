@@ -178,7 +178,11 @@ impl GameServer {
             // Physics tick logic TODO
         }
 
-        if self.game_loop.tick.is_multiple_of(self.game_loop.ai_tick_rate) {
+        if self
+            .game_loop
+            .tick
+            .is_multiple_of(self.game_loop.ai_tick_rate)
+        {
             self.tick_ai();
         }
 
@@ -516,10 +520,12 @@ impl GameServer {
                 _ => None,
             };
 
-            let look_msg = move_bundle.orientation().map(|orientation| EntityMessage::Look {
-                entity_id,
-                orientation,
-            });
+            let look_msg = move_bundle
+                .orientation()
+                .map(|orientation| EntityMessage::Look {
+                    entity_id,
+                    orientation,
+                });
 
             match (move_msg, look_msg) {
                 (Some(move_msg), Some(look_msg)) => {
@@ -575,8 +581,11 @@ impl GameServer {
                     )?;
                     let entity = entity_mut.id();
 
-                    self.client_states
-                        .insert(client_id, entity, Vec2iChunk::from(bundle.position.0));
+                    self.client_states.insert(
+                        client_id,
+                        entity,
+                        Vec2iChunk::from(bundle.position.0),
+                    );
 
                     self.sync_existing_entities(
                         client_id,
@@ -588,8 +597,12 @@ impl GameServer {
                 ServerEvent::ClientDisconnected { client_id, .. } => {
                     let client_id = NetworkId(client_id);
                     if let Some(entity) = self.client_states.remove(&client_id) {
-                        self.world
-                            .despawn(&mut self.server, self.client_states.all(), client_id, entity);
+                        self.world.despawn(
+                            &mut self.server,
+                            self.client_states.all(),
+                            client_id,
+                            entity,
+                        );
                     }
                 }
             }
@@ -701,7 +714,11 @@ impl GameServer {
                                 if let Some(before) =
                                     self.set_block_and_sync(block.position().into(), BlockId::AIR)?
                                 {
-                                    self.emit_block_break_particles(block.position(), normal, before)?;
+                                    self.emit_block_break_particles(
+                                        block.position(),
+                                        normal,
+                                        before,
+                                    )?;
                                 }
                             }
                         }
@@ -716,8 +733,8 @@ impl GameServer {
                         ClientMessage::Look(orientation) => {
                             let mut query = self.world.world_mut().entity_mut(entity);
 
-                            let Ok((mut current_orientation, position)) =
-                                query.get_components_mut::<(&mut EntityOrientation, &EntityPosition)>()
+                            let Ok((mut current_orientation, position)) = query
+                                .get_components_mut::<(&mut EntityOrientation, &EntityPosition)>()
                             else {
                                 continue;
                             };
