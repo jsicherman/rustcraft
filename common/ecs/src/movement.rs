@@ -1,7 +1,8 @@
 use std::{collections::HashMap, time::Duration};
 
-use block::TexturePack;
-use chunk::{ChunkMap, ChunkProvider};
+use chunk::{Block, ChunkMap, ChunkProvider};
+use resources::block::BlockType;
+use resources::{ResourcePack, entity::ModelDefinition};
 use smallvec::SmallVec;
 use spatial::{
     aabb::{Aabb, AxisAlignedBoundingBox},
@@ -10,12 +11,10 @@ use spatial::{
 };
 
 use crate::{
-    BoxCollider, CollisionStatus, Entity, EntityOrientation, EntityPosition, EntityVelocity,
-    MovementIntent, World,
+    BoxCollider, CollisionStatus, Entity, EntityModel, EntityOrientation, EntityPosition,
+    EntityVelocity, MovementIntent, World,
 };
 
-const MOVE_SPEED: f32 = 4.2;
-const JUMP_VELOCITY: f32 = 6.3;
 const GRAVITY: f32 = -12.5;
 const TERMINAL_VELOCITY: f32 = -50.0;
 
@@ -71,15 +70,16 @@ impl MoveBundle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CollisionEvent {
-    pub toi: Duration,
-    pub normal: Vec3fGlobal,
-    pub penetration: f32,
+struct CollisionEvent {
+    toi: Duration,
+    normal: Vec3fGlobal,
+    penetration: f32,
 }
 
 /// Apply gravity/jump to the given velocity, based on their `collision_status`
 pub fn apply_gravity(
     mut velocity: Vec3fGlobal,
+    jump_strength: f32,
     intent: &MovementIntent,
     collision_status: CollisionStatus,
     dt: Duration,
@@ -87,7 +87,7 @@ pub fn apply_gravity(
     let is_grounded = collision_status == CollisionStatus::OnGround && velocity.y() <= 0.0;
 
     if intent.jump && (is_grounded || intent.fly) {
-        velocity += [0.0, JUMP_VELOCITY, 0.0].into();
+        velocity += [0.0, jump_strength, 0.0].into();
     } else if !is_grounded && !intent.fly {
         velocity += [0.0, GRAVITY * dt.as_secs_f32(), 0.0].into();
         velocity.clamp((.., TERMINAL_VELOCITY.., ..));
@@ -274,46 +274,28 @@ const TOI_EPSILON: f32 = 1e-5;
 const GROUND_PROBE_EPSILON: f32 = 2e-4;
 const GROUND_VELOCITY_EPSILON: f32 = 1e-4;
 
-fn has_ground_support<CP: ChunkProvider>(
+fn has_ground_support(
+    candidate_blocks: &[(Block<Global>, &BlockType, AxisAlignedBoundingBox<Global>)],
     position: Vec3fGlobal,
     bounding_box: BoxCollider,
-    chunks: &CP,
-    block_registry: &TexturePack,
 ) -> bool {
     let aabb = bounding_box.0.aabb(position);
 
-    let probe = AxisAlignedBoundingBox::new(
-        [
-            aabb.min().x(),
-            aabb.min().y() - GROUND_PROBE_EPSILON,
-            aabb.min().z(),
-        ]
-        .into(),
-        [aabb.max().x(), aabb.max().y(), aabb.max().z()].into(),
-    );
+    candidate_blocks
+        .iter()
+        .any(|(_candidate, _block_type, candidate_aabb)| {
+            let x_overlap = aabb.max().x() > candidate_aabb.min().x() + MOVE_EPSILON
+                && aabb.min().x() < candidate_aabb.max().x() - MOVE_EPSILON;
+            let z_overlap = aabb.max().z() > candidate_aabb.min().z() + MOVE_EPSILON
+                && aabb.min().z() < candidate_aabb.max().z() - MOVE_EPSILON;
 
-    chunks.intersecting(&probe).any(|candidate| {
-        if !block_registry
-            .get_block_type(candidate.id())
-            .solidity()
-            .is_solid()
-        {
-            return false;
-        }
+            if !x_overlap || !z_overlap {
+                return false;
+            }
 
-        let candidate_aabb = candidate.aabb();
-        let x_overlap = aabb.max().x() > candidate_aabb.min().x() + MOVE_EPSILON
-            && aabb.min().x() < candidate_aabb.max().x() - MOVE_EPSILON;
-        let z_overlap = aabb.max().z() > candidate_aabb.min().z() + MOVE_EPSILON
-            && aabb.min().z() < candidate_aabb.max().z() - MOVE_EPSILON;
-
-        if !x_overlap || !z_overlap {
-            return false;
-        }
-
-        let foot_gap = aabb.min().y() - candidate_aabb.max().y();
-        (-MOVE_EPSILON..=GROUND_PROBE_EPSILON).contains(&foot_gap)
-    })
+            let foot_gap = aabb.min().y() - candidate_aabb.max().y();
+            (-MOVE_EPSILON..=GROUND_PROBE_EPSILON).contains(&foot_gap)
+        })
 }
 
 /// Collision detection and resolution for a single entity, based on its `Collider` and `Velocity`.
@@ -323,21 +305,39 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
     previous_status: CollisionStatus,
     velocity: Vec3fGlobal,
     chunks: &CP,
-    block_registry: &TexturePack,
+    resource_pack: &ResourcePack,
     dt: Duration,
 ) -> (Vec3fGlobal, Vec3fGlobal, CollisionStatus) {
     const MAX_COLLISION_ITERATIONS: usize = 6;
     const GROUND_NORMAL_THRESHOLD: f32 = 0.7;
+    const STEP_HEIGHT_RATIO: f32 = 0.5;
 
     let dt_secs = dt.as_secs_f32();
     if dt_secs <= f32::EPSILON {
         return (position, velocity, previous_status);
     }
 
+    let step_height = bounding_box.0.height() * STEP_HEIGHT_RATIO;
+
     let mut position = position;
     let mut velocity = velocity;
     let mut remaining_dt = dt_secs;
-    let mut resolved_normals = SmallVec::<[Vec3fGlobal; 8]>::new();
+    let mut consumed_step = false;
+    let mut resolved_normals = SmallVec::<[_; 8]>::new();
+
+    let aabb_swept_full = bounding_box.0.aabb_swept(position, velocity, dt);
+    let candidate_blocks: Vec<_> = chunks
+        .intersecting(&aabb_swept_full)
+        .filter_map(|block| {
+            let block_type = resource_pack.get_block_type(block.id());
+            if block_type.solidity().is_solid() {
+                let aabb = block.aabb(block_type);
+                Some((block, block_type, aabb))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     'iterations: for _ in 0..MAX_COLLISION_ITERATIONS {
         if remaining_dt < f32::EPSILON {
@@ -350,29 +350,20 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
                 .0
                 .aabb_swept(position, velocity, Duration::from_secs_f32(remaining_dt));
 
-        let mut collisions = SmallVec::<[CollisionEvent; 3]>::new();
+        let mut collisions = SmallVec::<[_; 3]>::new();
 
-        for candidate in chunks.intersecting(&aabb_swept) {
-            if !block_registry
-                .get_block_type(candidate.id())
-                .solidity()
-                .is_solid()
-            {
-                continue;
-            }
-
-            let candidate_aabb = candidate.aabb();
-            if !aabb_swept.intersects_epsilon(&candidate_aabb, FILTER_EPSILON) {
+        for (_candidate, _block_type, candidate_aabb) in &candidate_blocks {
+            if !aabb_swept.intersects_epsilon(candidate_aabb, FILTER_EPSILON) {
                 continue;
             }
 
             if let Some(event) = narrow_phase_aabb(
                 current_aabb,
-                candidate_aabb,
+                *candidate_aabb,
                 velocity,
                 Duration::from_secs_f32(remaining_dt),
             ) {
-                collisions.push(event);
+                collisions.push((event, candidate_aabb));
             }
         }
 
@@ -381,7 +372,7 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
             break 'iterations;
         }
 
-        collisions.sort_by(|a, b| {
+        collisions.sort_by(|(a, _), (b, _)| {
             a.toi.cmp(&b.toi).then(
                 b.penetration
                     .partial_cmp(&a.penetration)
@@ -391,12 +382,12 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
 
         let intersecting: SmallVec<[_; 4]> = collisions
             .iter()
-            .filter(|e| e.toi.as_secs_f32() <= TOI_EPSILON && e.penetration > 0.0)
+            .filter(|(e, _)| e.toi.as_secs_f32() <= TOI_EPSILON && e.penetration > 0.0)
             .collect();
 
         if !intersecting.is_empty() {
             let mut handled_normals = SmallVec::<[_; 4]>::new();
-            for event in &intersecting {
+            for (event, _) in &intersecting {
                 if !handled_normals.contains(&event.normal) {
                     position += event.normal * (event.penetration + MOVE_EPSILON);
                     let dot = velocity.dot(event.normal);
@@ -409,12 +400,10 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
                     handled_normals.push(event.normal);
                 }
             }
-
-            // Re-run the iteration
             continue;
         }
 
-        let first_toi = collisions[0].toi.as_secs_f32().max(0.0);
+        let first_toi = collisions[0].0.toi.as_secs_f32().max(0.0);
         if first_toi > 0.0 {
             position += velocity * first_toi;
             remaining_dt -= first_toi;
@@ -423,13 +412,28 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
 
         let simultaneous: SmallVec<[_; 4]> = collisions
             .iter()
-            .filter(|event| (event.toi.as_secs_f32() - first_toi).abs() <= TOI_EPSILON)
+            .filter(|(event, _)| (event.toi.as_secs_f32() - first_toi).abs() <= TOI_EPSILON)
             .collect();
 
+        let mut stepped_up = consumed_step;
         let mut handled_normals = SmallVec::<[_; 4]>::new();
-        for event in simultaneous {
+
+        for (event, candidate_aabb) in &simultaneous {
             if handled_normals.contains(&event.normal) {
                 continue;
+            }
+
+            // Check if this is a horizontal collision we can step up
+            let is_horizontal = event.normal.y().abs() < GROUND_NORMAL_THRESHOLD;
+            if is_horizontal && previous_status == CollisionStatus::OnGround {
+                let step_up_amount = candidate_aabb.max().y() - current_aabb.min().y();
+
+                if step_up_amount > 0.0 && step_up_amount <= step_height {
+                    position[1] += step_up_amount + MOVE_EPSILON;
+                    stepped_up = true;
+                    consumed_step = true;
+                    continue;
+                }
             }
 
             position += event.normal * MOVE_EPSILON;
@@ -442,7 +446,13 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
             if !resolved_normals.contains(&event.normal) {
                 resolved_normals.push(event.normal);
             }
+
             handled_normals.push(event.normal);
+        }
+
+        // If we stepped up, retry the iteration without consuming remaining_dt
+        if stepped_up {
+            continue;
         }
     }
 
@@ -450,7 +460,7 @@ pub fn apply_collision_aabb<CP: ChunkProvider>(
         .iter()
         .any(|n| n.y() > GROUND_NORMAL_THRESHOLD);
     let grounded_by_support = velocity.y() <= GROUND_VELOCITY_EPSILON
-        && has_ground_support(position, bounding_box, chunks, block_registry);
+        && has_ground_support(&candidate_blocks, position, bounding_box);
 
     let status = if grounded_by_collision || grounded_by_support {
         CollisionStatus::OnGround
@@ -467,6 +477,7 @@ pub fn apply_intent(
     position: Vec3fGlobal,
     orientation: Orientation,
     intent: &MovementIntent,
+    move_speed: f32,
     mut velocity: Vec3fGlobal,
     dt: Duration,
 ) -> (Vec3fGlobal, Vec3fGlobal) {
@@ -484,7 +495,7 @@ pub fn apply_intent(
     };
 
     let movement_offset = orientation.movement_offset(
-        MOVE_SPEED * speed_multiplier,
+        move_speed * speed_multiplier,
         dt,
         intent.forward,
         intent.strafe,
@@ -507,7 +518,8 @@ pub fn apply_intent_all(
     world: &mut World,
     stack: &mut HashMap<Entity, MoveBundle>,
     chunk_map: &ChunkMap,
-    block_registry: &TexturePack,
+    block_registry: &ResourcePack,
+    broadcast_tick: bool,
     dt: Duration,
 ) {
     const BROADCAST_POS_TOLERANCE_SQ: f32 = 1e-2 * 1e-2;
@@ -516,6 +528,7 @@ pub fn apply_intent_all(
 
     let mut query = world.query::<(
         Entity,
+        &EntityModel,
         &mut EntityPosition,
         &mut EntityVelocity,
         &EntityOrientation,
@@ -524,13 +537,36 @@ pub fn apply_intent_all(
         &mut CollisionStatus,
     )>();
 
-    for (entity, mut position, mut velocity, orientation, intent, collider, mut collision_status) in
-        query.iter_mut(world)
+    for (
+        entity,
+        model,
+        mut position,
+        mut velocity,
+        orientation,
+        intent,
+        collider,
+        mut collision_status,
+    ) in query.iter_mut(world)
     {
-        let new_velocity = apply_gravity(velocity.0, intent, *collision_status, dt);
+        // FIXME: this feels hacky
+        let base_properties = ModelDefinition::from_handle(model.model_id).properties();
 
-        let (new_position, new_velocity) =
-            apply_intent(position.0, orientation.0, intent, new_velocity, dt);
+        let new_velocity = apply_gravity(
+            velocity.0,
+            base_properties.jump_velocity,
+            intent,
+            *collision_status,
+            dt,
+        );
+
+        let (new_position, new_velocity) = apply_intent(
+            position.0,
+            orientation.0,
+            intent,
+            base_properties.move_speed,
+            new_velocity,
+            dt,
+        );
 
         let (final_position, final_velocity, new_status) = apply_collision_aabb(
             new_position,
@@ -542,6 +578,7 @@ pub fn apply_intent_all(
             dt,
         );
 
+        // FIXME: would be nice to quantize on broadcast ticks
         let broadcast_worthy =
             (final_position - position.0).length_sq() > BROADCAST_POS_TOLERANCE_SQ;
 

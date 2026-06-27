@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use model::ModelDefinition;
+use resources::entity::ModelDefinition;
 use serde::{Deserialize, Serialize};
 
 use crate::vectors::{Chunk, CoordSpace, Global, IntoSpace, Vec2iChunk, Vec3f};

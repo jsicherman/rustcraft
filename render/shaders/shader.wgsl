@@ -4,6 +4,7 @@ struct Camera {
 
 struct ObjectUniform {
     transform: mat4x4<f32>,
+    scale: vec4<f32>,
     mat_layers_01: vec4<u32>,
     mat_layers_02: vec4<u32>,
 }
@@ -43,7 +44,11 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = camera.view_proj * object.transform * vec4<f32>(in.position, 1.0);
+
+    let scaled_pos = vec4<f32>(in.position * object.scale.xyz, 1.0);
+    let world_pos = object.transform * scaled_pos;
+    
+    out.clip_position = camera.view_proj * world_pos;
     out.normal = in.normal;
     out.uv = in.uv;
     out.material = in.material;

@@ -1,7 +1,7 @@
 use std::{f32::consts::TAU, time::Duration};
 
 use ecs::eye_position;
-use model::ModelDefinition;
+use resources::entity::ModelDefinition;
 use spatial::{
     orientation::{Orientation, perspective},
     vectors::{Global, Vec3fGlobal, Vec4f},

@@ -2,13 +2,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
     Mesh,
-    mesher::{Material, build_mesh_geometry},
-    render::MeshCpu,
+    mesher::{MeshCpu, build_mesh_geometry},
+    texture::{BlockScale, MaterialTextures},
 };
 
 struct MeshBuildJob {
     key: (i32, i32),
-    voxels: Vec<u32>,
+    voxels: Vec<u8>,
     size_xyz: [usize; 3],
 }
 
@@ -35,13 +35,14 @@ impl MeshCpu {
 }
 
 impl VoxelMesher {
-    pub fn new(material_layers: Vec<[u32; 6]>) -> Self {
+    pub fn new(material_layers: Vec<MaterialTextures>, scale_layers: Vec<BlockScale>) -> Self {
         let (job_tx, job_rx) = mpsc::channel::<MeshBuildJob>();
         let (result_tx, result_rx) = mpsc::channel::<MeshBuildResult>();
 
         std::thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
-                let cpu_mesh = build_cpu_mesh(&job.voxels, job.size_xyz, &material_layers);
+                let cpu_mesh =
+                    build_cpu_mesh(&job.voxels, job.size_xyz, &material_layers, &scale_layers);
 
                 if result_tx
                     .send(MeshBuildResult {
@@ -58,7 +59,7 @@ impl VoxelMesher {
         Self { job_tx, result_rx }
     }
 
-    pub fn enqueue(&self, key: (i32, i32), voxels: Vec<u32>, size_xyz: [usize; 3]) {
+    pub fn enqueue(&self, key: (i32, i32), voxels: Vec<u8>, size_xyz: [usize; 3]) {
         let _ = self.job_tx.send(MeshBuildJob {
             key,
             voxels,
@@ -77,11 +78,12 @@ impl VoxelMesher {
 }
 
 fn build_cpu_mesh(
-    voxels: &[Material],
+    voxels: &[u8],
     size_xyz: [usize; 3],
-    material_layers: &[[u32; 6]],
+    material_layers: &[MaterialTextures],
+    scale_layers: &[BlockScale],
 ) -> MeshCpu {
-    let (vertices, indices) = build_mesh_geometry(voxels, size_xyz, material_layers);
+    let (vertices, indices) = build_mesh_geometry(voxels, size_xyz, material_layers, scale_layers);
 
     MeshCpu { vertices, indices }
 }

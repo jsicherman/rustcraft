@@ -1,12 +1,15 @@
 [package]
 authors = ["Jordan Sicherman <jordan.sicherman@gmail.com>"]
-description = "Physics code"
+description = "Simulation code"
 edition = "2024"
-name = "physics"
+name = "simulation"
 publish = false
 version = "0.1.0"
 
 [dependencies]
+chunk = { path = "../chunk" }
+protocol = { path = "../protocol" }
 spatial = { path = "../spatial" }
 
 serde.workspace = true
+smallvec.workspace = true

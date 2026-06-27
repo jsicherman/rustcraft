@@ -7,7 +7,6 @@ publish = false
 version = "0.1.0"
 
 [dependencies]
-block = { path = "../common/block" }
 world = { path = "../common/world" }
 
 anyhow.workspace = true

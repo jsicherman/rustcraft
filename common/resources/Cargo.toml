@@ -1,13 +1,12 @@
 [package]
 authors = ["Jordan Sicherman <jordan.sicherman@gmail.com>"]
-description = "Model code"
+description = "Resource code"
 edition = "2024"
-name = "model"
+name = "resources"
 publish = false
 version = "0.1.0"
 
 [dependencies]
-block = { path = "../block" }
 render = { path = "../../render" }
 
 serde.workspace = true

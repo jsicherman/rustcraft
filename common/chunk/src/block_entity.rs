@@ -16,3 +16,6 @@ impl BlockEntityData {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct BlockEntityUpdate {}

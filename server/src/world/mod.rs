@@ -1,11 +1,11 @@
 use anyhow::Error;
 use bevy_ecs::{bundle::Bundle, world::EntityWorldMut};
-use block::BlockId;
 use chunk::{Chunk, ChunkMap, ChunkProvider, ChunkScratch, ChunkStore, WireChunk};
 use ecs::{BoxCollider, Entity, EntityModel, EntityPosition, World};
 use noise::{Fbm, NoiseFn, Perlin};
-use protocol::{CHANNEL_ENTITIES, NetworkId, Packet, ServerMessage};
+use protocol::{ClientBound, NetworkId, entity::EntityMessage};
 use renet::RenetServer;
+use resources::block::BlockId;
 use serde::Deserialize;
 use spatial::{
     SEA_LEVEL, WORLD_HEIGHT,
@@ -76,30 +76,24 @@ impl GameWorld {
         observers: impl Iterator<Item = NetworkId>,
         entity_id: NetworkId,
         bundle: B,
-    ) -> Result<(EntityWorldMut<'_>, EntityPosition), Error> {
+    ) -> Result<EntityWorldMut<'_>, Error> {
         let entity = self.world_mut().spawn(bundle);
 
         let (&position, &bounding_box, &model) =
             entity.get_components::<(&EntityPosition, &BoxCollider, &EntityModel)>()?;
 
-        let msg = ServerMessage::EntitySpawn {
+        let msg = EntityMessage::Spawn {
             entity_id,
             position,
             bounding_box,
             model,
-        }
-        .encode()?;
+        };
 
-        let mut observed = 0;
-        for observer in observers {
-            observed += 1;
-            server.send_message(*observer, CHANNEL_ENTITIES, msg.clone());
-        }
+        msg.transmit(server, observers, [], None);
 
-        tracing::debug!("Spawn: {entity_id:?} {model:?} ({observed} observers)");
-
-        Ok((entity, position))
+        Ok(entity)
     }
+
     pub fn despawn(
         &mut self,
         server: &mut RenetServer,
@@ -111,15 +105,8 @@ impl GameWorld {
             return false;
         }
 
-        let msg = ServerMessage::EntityDespawn(entity_id).encode().unwrap();
-
-        let mut observed = 0;
-        for observer in observers {
-            observed += 1;
-            server.send_message(*observer, CHANNEL_ENTITIES, msg.clone());
-        }
-
-        tracing::debug!("Despawn: {entity_id:?} ({observed} observers)");
+        let msg = EntityMessage::Despawn(entity_id);
+        msg.transmit(server, observers, [], None);
 
         true
     }
@@ -201,7 +188,7 @@ impl WorldGenerator for FlatWorldGenerator {
                                 } else if world_y < SEA_LEVEL as i32 {
                                     BlockId::DIRT
                                 } else if world_y == SEA_LEVEL as i32 {
-                                    BlockId::GRASS
+                                    BlockId::STONE_SLAB
                                 } else {
                                     BlockId::AIR
                                 };

@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, time::Duration};
 
-use physics::{ParticleEmitter, ParticleSample, sample_emitter};
+use protocol::particles::ParticleEmitter;
 use render::OverlayParticle;
+use simulation::particles::{ParticleSample, sample_emitter};
 use spatial::vectors::Vec3fGlobal;
 
 const MAX_EMITTERS: usize = 128;

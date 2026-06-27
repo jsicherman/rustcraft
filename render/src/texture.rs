@@ -1,25 +1,19 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Error};
-use block::{BlockTexture, TexturePack};
 use wgpu::{
-    AddressMode, Device, Extent3d, FilterMode, Origin3d, Queue, Sampler, SamplerDescriptor,
-    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
-    TextureViewDimension,
+    AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, Device,
+    Extent3d, FilterMode, Origin3d, Queue, Sampler, SamplerBindingType, SamplerDescriptor,
+    ShaderStages, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureView,
+    TextureViewDescriptor, TextureViewDimension,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MaterialTextures(pub(crate) [u32; 6]);
-
-impl From<[u32; 6]> for MaterialTextures {
-    fn from(value: [u32; 6]) -> Self {
-        Self(value)
-    }
-}
+pub type BlockScale = [[f32; 2]; 3];
+pub type MaterialTextures = [u32; 6];
 
 pub struct TextureArray {
-    texture: Texture,
     view: TextureView,
     sampler: Sampler,
 }
@@ -33,11 +27,12 @@ impl TextureArray {
     }
 }
 
-pub fn build_texture_array(
+fn build_texture_array(
     device: &Device,
     queue: &Queue,
-    registry: &TexturePack,
-) -> Result<(TextureArray, Vec<MaterialTextures>), Error> {
+    block_resources: Vec<([&'static Path; 6], BlockScale)>,
+    texture_resources: Vec<[&'static Path; 6]>,
+) -> Result<(TextureArray, Vec<MaterialTextures>, Vec<BlockScale>), Error> {
     let mut layer_of = HashMap::new();
     let mut paths = Vec::new();
 
@@ -48,21 +43,12 @@ pub fn build_texture_array(
         })
     };
 
-    for texture in registry
-        .blocks()
-        .map(|block| block.texture())
-        .chain(registry.textures())
+    for texture in block_resources
+        .iter()
+        .flat_map(|(texture, _)| *texture)
+        .chain(texture_resources.iter().flat_map(|texture| *texture))
     {
-        match texture {
-            BlockTexture::Uniform(p) => {
-                intern(p);
-            }
-            BlockTexture::Directional(paths) => {
-                for path in paths {
-                    intern(path);
-                }
-            }
-        }
+        intern(texture);
     }
 
     let mut images = Vec::with_capacity(paths.len());
@@ -147,25 +133,76 @@ pub fn build_texture_array(
         ..Default::default()
     });
 
-    let materials = registry
-        .blocks()
-        .map(|block| match block.texture() {
-            BlockTexture::Uniform(p) => {
-                let layer = layer_of[p];
-                MaterialTextures([layer; 6])
-            }
-            BlockTexture::Directional(materials) => {
-                MaterialTextures(materials.map(|path| layer_of[path]))
-            }
+    let materials = block_resources
+        .iter()
+        .map(|(texture, _)| match texture.len() {
+            1 => [layer_of[texture[0]]; 6],
+            6 => std::array::from_fn(|i| layer_of[texture[i]]),
+            _ => unreachable!("block texture array must have either 1 or 6 textures"),
         })
         .collect();
 
-    Ok((
-        TextureArray {
-            texture,
-            view,
-            sampler,
-        },
-        materials,
-    ))
+    let scale_layers = block_resources.iter().map(|(_, scale)| *scale).collect();
+
+    Ok((TextureArray { view, sampler }, materials, scale_layers))
+}
+
+#[allow(clippy::type_complexity)]
+pub fn configure_textures(
+    device: &Device,
+    queue: &Queue,
+    block_resources: Vec<([&'static Path; 6], BlockScale)>,
+    texture_resources: Vec<[&'static Path; 6]>,
+) -> (
+    BindGroupLayout,
+    BindGroup,
+    Vec<MaterialTextures>,
+    Vec<BlockScale>,
+) {
+    let texture_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("texture array bgl"),
+        entries: &[
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Float { filterable: true },
+                    view_dimension: TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+
+    let (textures, material_layers, scale_layers) =
+        build_texture_array(device, queue, block_resources, texture_resources).unwrap();
+
+    let texture_bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("texture array bind group"),
+        layout: &texture_bgl,
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(textures.view()),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::Sampler(textures.sampler()),
+            },
+        ],
+    });
+
+    (
+        texture_bgl,
+        texture_bind_group,
+        material_layers,
+        scale_layers,
+    )
 }

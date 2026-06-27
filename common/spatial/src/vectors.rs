@@ -153,6 +153,10 @@ macro_rules! define_vec {
                 $($field: 0 as $scalar,)+
                 _space: std::marker::PhantomData,
             };
+            pub const UNIT: Self = Self {
+                $($field: 1 as $scalar,)+
+                _space: std::marker::PhantomData,
+            };
 
             $(
                 pub const UP: Self = $up_val;
@@ -176,6 +180,11 @@ macro_rules! define_vec {
             #[inline]
             pub fn ceil(self) -> Self {
                 Self::new($((self.$field as f32).ceil() as $scalar),+)
+            }
+
+            #[inline]
+            pub fn lerp(self, other: Self, t: f32) -> Self {
+                Self::new($((self.$field as f32 + (other.$field as f32 - self.$field as f32) * t) as $scalar),+)
             }
         }
 

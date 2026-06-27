@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use block::BlockId;
+use resources::block::BlockId;
 use serde::{Deserialize, Serialize};
 use spatial::{WORLD_HEIGHT, vectors::Vec2iChunk};
 

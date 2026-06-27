@@ -19,18 +19,17 @@ name = "client_mode"
 path = "src/bin/client_mode.rs"
 
 [dependencies]
-block = { path = "../common/block" }
 chunk = { path = "../common/chunk" }
 ecs = { path = "../common/ecs" }
-entity = { path = "../common/entity" }
-model = { path = "../common/model" }
-physics = { path = "../common/physics" }
 protocol = { path = "../common/protocol" }
 render = { path = "../render" }
+resources = { path = "../common/resources" }
 server = { path = "../server" }
+simulation = { path = "../common/simulation" }
 spatial = { path = "../common/spatial" }
 world = { path = "../common/world" }
 
+bevy_ecs.workspace = true
 pollster.workspace = true
 rand.workspace = true
 renet.workspace = true

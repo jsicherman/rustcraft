@@ -1,14 +1,14 @@
 use std::time::Duration;
 
-use block::REACH_DISTANCE;
 use chunk::Chunk;
 use chunk::raycasting::raycast;
-use ecs::{BoxCollider, Entity, EntityModel, EntityOrientation, EntityPosition};
+use ecs::{BoxCollider, Entity, EntityModel, EntityOrientation, EntityPosition, EntityVelocity};
 use protocol::RENDER_DISTANCE_SQ;
 use render::{
     DebugOverlayData,
     model::{RenderHandle, RenderInstance},
 };
+use resources::entity::EntityProperties;
 use smallvec::SmallVec;
 use spatial::{
     CHUNK_SIZE, CHUNK_SIZE_SQ, WORLD_HEIGHT,
@@ -67,6 +67,7 @@ impl AppState {
                     RenderHandle::Model(model.model_id),
                     yaw.apply_to(position.0.translation_matrix())
                         .map(std::convert::Into::into),
+                    Vec3fGlobal::UNIT.into(),
                 )
                 .with_transforms_pivots(
                     [(
@@ -119,6 +120,7 @@ impl AppState {
                     .0
                     .translation_matrix()
                     .map(std::convert::Into::into),
+                Vec3fGlobal::UNIT.into(),
             ),
             Self::cull_sphere(position.0, *collider),
         );
@@ -155,7 +157,7 @@ impl AppState {
         }
 
         for (coordinate, voxels) in queued_frames {
-            self.renderer.chunk_builder.enqueue(
+            self.renderer.voxel_mesher.enqueue(
                 (coordinate.x(), coordinate.z()),
                 voxels,
                 Chunk::CHUNK_COLUMN,
@@ -164,7 +166,7 @@ impl AppState {
     }
 
     pub fn receive_chunk_frames(&mut self, current_chunk_position: Vec2iChunk) {
-        for result in self.renderer.chunk_builder.collect_results() {
+        for result in self.renderer.voxel_mesher.collect_results() {
             let coordinate = Vec2iChunk::from(result.key);
 
             let Some(client_chunk) = self.chunk_state.chunks.get_mut(&coordinate) else {
@@ -177,7 +179,7 @@ impl AppState {
                 continue;
             }
 
-            let handle = self.renderer.upload_mesh(result.mesh);
+            let handle = self.renderer.upload(result.mesh);
 
             if let Some(old_instance) = client_chunk.instance.take() {
                 let RenderHandle::Mesh(old_mesh) = old_instance.handle() else {
@@ -191,6 +193,7 @@ impl AppState {
                 coordinate
                     .translation_matrix()
                     .map(std::convert::Into::into),
+                Vec3fGlobal::UNIT.into(),
             ));
         }
     }
@@ -198,6 +201,7 @@ impl AppState {
     pub fn render_frame(
         &mut self,
         client_position: Vec3fGlobal,
+        client_properties: &EntityProperties,
         client_orientation: Orientation,
         dt: Duration,
     ) {
@@ -216,21 +220,23 @@ impl AppState {
         let skybox_vp = self.camera.skybox_view_projection(client_orientation);
         let frustum = self.camera.frustum(client_position, client_orientation);
 
-        let chunk_height = WORLD_HEIGHT as f32;
-        let chunk_size = CHUNK_SIZE as f32;
-
         for (coordinate, chunk) in &self.chunk_state.chunks {
             let Some(instance) = chunk.instance() else {
                 continue;
             };
 
             let min: Vec3fGlobal = [
-                coordinate.x() as f32 * chunk_size,
+                coordinate.x() as f32 * CHUNK_SIZE as f32,
                 0.0,
-                coordinate.z() as f32 * chunk_size,
+                coordinate.z() as f32 * CHUNK_SIZE as f32,
             ]
             .into();
-            let max = [min[0] + chunk_size, chunk_height, min[2] + chunk_size].into();
+            let max = [
+                min[0] + CHUNK_SIZE as f32,
+                WORLD_HEIGHT as f32,
+                min[2] + CHUNK_SIZE as f32,
+            ]
+            .into();
 
             if !frustum.intersects_aabb(min, max) {
                 continue;
@@ -264,19 +270,27 @@ impl AppState {
             instances.push(instance);
         }
 
-        let target_position_normal = raycast(
+        let target = raycast(
             self.camera.get_eye_position(client_position),
             client_orientation,
-            REACH_DISTANCE,
+            client_properties.reach_distance,
             &self.chunk_state,
-            &self.texture_pack,
+            &self.resource_pack,
         )
-        .map(|(block, normal)| {
-            let position: [i32; 3] = block.position().into();
-            (
-                [position[0] as f32, position[1] as f32, position[2] as f32],
-                [normal[0] as f32, normal[1] as f32, normal[2] as f32],
-            )
+        .map(|(block, block_type, normal)| {
+            let block_position: [i32; 3] = block.position().into();
+            let offset = block_type.dimensions().offset();
+
+            let position = [
+                block_position[0] as f32 + offset[0],
+                block_position[1] as f32 + offset[1],
+                block_position[2] as f32 + offset[2],
+            ];
+
+            let normal = [normal[0] as f32, normal[1] as f32, normal[2] as f32];
+            let scale = block_type.dimensions().size();
+
+            [position, normal, scale]
         });
 
         let debug_overlay = DebugOverlayData {
@@ -288,7 +302,7 @@ impl AppState {
             mesh_count: num_mesh,
             model_count: num_model,
             entity_count: self.entity_state.num_instances() as u32,
-            frame_time_ms: dt.as_millis(),
+            frames_per_second: (1.0 / dt.as_secs_f32()) as u32,
             average_frame_time_ms: self.frame_timer.avg(),
             time_of_day: self.time_of_day.to_hours(),
         };
@@ -299,14 +313,32 @@ impl AppState {
             &mut self.render_queue,
             &self.window,
             &instances,
-            (
-                vp.map(std::convert::Into::into),
-                skybox_vp.map(std::convert::Into::into),
-            ),
-            target_position_normal,
+            vp.map(std::convert::Into::into),
+            skybox_vp.map(std::convert::Into::into),
+            target,
             overlay_particles,
             &debug_overlay,
             self.time_of_day,
         );
+    }
+}
+
+pub fn reconcile(
+    predicted: (EntityPosition, EntityVelocity),
+    server: (EntityPosition, EntityVelocity),
+    error: f32,
+    snap_threshold: f32,
+    ignore_threshold: f32,
+    alpha: f32,
+) -> (EntityPosition, EntityVelocity) {
+    if error < ignore_threshold {
+        predicted
+    } else if error > snap_threshold {
+        server
+    } else {
+        (
+            EntityPosition(predicted.0.0.lerp(server.0.0, alpha)),
+            EntityVelocity(predicted.1.0.lerp(server.1.0, alpha)),
+        )
     }
 }

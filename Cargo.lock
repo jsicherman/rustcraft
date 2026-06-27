@@ -486,14 +486,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "block"
-version = "0.1.0"
-dependencies = [
- "entity",
- "serde",
-]
-
-[[package]]
 name = "block2"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -652,7 +644,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bincode",
- "block",
+ "resources",
  "serde",
  "spatial",
  "tracing",
@@ -675,20 +667,19 @@ dependencies = [
 name = "client"
 version = "0.1.0"
 dependencies = [
- "block",
+ "bevy_ecs",
  "chunk",
  "ecs",
- "entity",
- "model",
- "physics",
  "pollster",
  "protocol",
  "rand 0.10.1",
  "render",
  "renet",
  "renet_netcode",
+ "resources",
  "serde",
  "server",
+ "simulation",
  "smallvec",
  "spatial",
  "toml",
@@ -979,11 +970,10 @@ name = "ecs"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
- "block",
  "chunk",
- "model",
  "ordered-float",
  "render",
+ "resources",
  "serde",
  "smallvec",
  "spatial",
@@ -1057,13 +1047,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b53f0d33a479321da6b0caa71366c9f67e8a2c149762d90bdc0d16e601ee8ecb"
 dependencies = [
  "bytemuck",
-]
-
-[[package]]
-name = "entity"
-version = "0.1.0"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -1850,15 +1833,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "model"
-version = "0.1.0"
-dependencies = [
- "block",
- "render",
- "serde",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2431,14 +2405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
-name = "physics"
-version = "0.1.0"
-dependencies = [
- "serde",
- "spatial",
-]
-
-[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2602,12 +2568,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bincode",
- "block",
  "chunk",
  "ecs",
- "physics",
+ "renet",
+ "resources",
  "serde",
+ "smallvec",
  "spatial",
+ "tracing",
  "world",
  "zstd",
 ]
@@ -2889,7 +2857,6 @@ name = "render"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "block",
  "bytemuck",
  "egui",
  "egui-wgpu",
@@ -2939,6 +2906,14 @@ checksum = "76bed9d6d190d20804b5645511932fef803145520ef4eb76d5e4b5a841980eac"
 dependencies = [
  "chacha20poly1305",
  "log",
+]
+
+[[package]]
+name = "resources"
+version = "0.1.0"
+dependencies = [
+ "render",
+ "serde",
 ]
 
 [[package]]
@@ -3091,15 +3066,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy_ecs",
- "block",
  "chunk",
  "ecs",
- "entity",
- "model",
  "noise",
  "protocol",
+ "rand 0.10.1",
  "renet",
  "renet_netcode",
+ "resources",
  "serde",
  "spatial",
  "tracing",
@@ -3151,6 +3125,17 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "simulation"
+version = "0.1.0"
+dependencies = [
+ "chunk",
+ "protocol",
+ "serde",
+ "smallvec",
+ "spatial",
+]
 
 [[package]]
 name = "skrifa"
@@ -3221,8 +3206,7 @@ dependencies = [
 name = "spatial"
 version = "0.1.0"
 dependencies = [
- "entity",
- "model",
+ "resources",
  "serde",
 ]
 

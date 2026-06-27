@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, sync::LazyLock};
 
 use anyhow::Error;
-use block::BlockId;
+use resources::block::BlockId;
 use spatial::{
     aabb::AxisAlignedBoundingBox,
     orientation::Direction,
@@ -25,21 +25,23 @@ pub(crate) static HOMOGENEOUS_SECTIONS: LazyLock<HashMap<u64, Vec<u8>>> = LazyLo
     sections
 });
 
-pub fn materialize(chunk: &Chunk, store: &ChunkStore) -> Vec<u32> {
-    let mut voxels = Vec::with_capacity(Chunk::CHUNK_VOLUME * chunk.section_hashes().len());
+// FIXME: consider whether we want to keep the client chunks this way or store them as WireChunk
+// to avoid the extra computation
+pub fn materialize(chunk: &Chunk, store: &ChunkStore) -> Vec<u8> {
+    let mut voxels = Vec::with_capacity(Chunk::CHUNK_VOLUME * chunk.num_sections());
 
     for &hash in chunk.section_hashes() {
         let Some(section) = store.load(hash) else {
-            voxels.resize(voxels.len() + Chunk::CHUNK_VOLUME, *BlockId::AIR as u32);
+            voxels.resize(voxels.len() + Chunk::CHUNK_VOLUME, *BlockId::AIR);
             continue;
         };
 
         match section.as_ref() {
             ChunkSection::Homogeneous(id) => {
-                voxels.resize(voxels.len() + Chunk::CHUNK_VOLUME, **id as u32);
+                voxels.resize(voxels.len() + Chunk::CHUNK_VOLUME, **id);
             }
             ChunkSection::Heterogeneous(blocks) => {
-                voxels.extend(blocks.iter().map(|&id| *id as u32));
+                voxels.extend(blocks.iter().map(|id| **id));
             }
             ChunkSection::Palette { .. } => {
                 for block_index in 0..Chunk::CHUNK_VOLUME {
@@ -47,7 +49,7 @@ pub fn materialize(chunk: &Chunk, store: &ChunkStore) -> Vec<u32> {
                     let z_local = (block_index / Chunk::CHUNK_SIZE) % Chunk::CHUNK_SIZE;
                     let y_local = block_index / (Chunk::CHUNK_SIZE * Chunk::CHUNK_SIZE);
                     let local = Vec3iLocal::from((x_local as i32, y_local as i32, z_local as i32));
-                    voxels.push(*section.get(local) as u32);
+                    voxels.push(*section.get(local));
                 }
             }
         }

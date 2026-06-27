@@ -7,7 +7,7 @@ publish = false
 version = "0.1.0"
 
 [dependencies]
-block = { path = "../block" }
+resources = { path = "../resources" }
 spatial = { path = "../spatial" }
 
 anyhow.workspace = true

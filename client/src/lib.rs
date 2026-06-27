@@ -13,14 +13,18 @@ use crate::{
     world::ChunkCache,
 };
 use ::world::TimeOfDay;
-use block::TexturePack;
 use ecs::{Entity, EntityOrientation, MovementIntent, World};
-use entity::EntityType;
-use model::ModelDefinition;
 use protocol::{NetworkId, PROTOCOL_ID};
-use render::{Renderer, model::RenderCommandGpu};
+use render::{
+    Renderer, cube,
+    model::{ModelHandle, RenderCommandGpu},
+};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
+use resources::{
+    ResourcePack,
+    entity::{EntityType, ModelDefinition},
+};
 use spatial::vectors::Vec2iChunk;
 use std::{
     collections::{HashMap, HashSet},
@@ -63,7 +67,7 @@ pub struct AppState {
     last_update: Instant,
     frame_timer: FrameTimer,
 
-    texture_pack: TexturePack,
+    resource_pack: ResourcePack,
 
     chunk_state: ChunkCache,
     entity_state: RenderState,
@@ -115,7 +119,7 @@ impl FrameTimer {
 pub struct PreviousState {
     pub intent: Option<MovementIntent>,
     pub orientation: Option<EntityOrientation>,
-    pub down: HashSet<MouseButton>,
+    pub down: HashMap<MouseButton, Instant>,
 }
 
 impl ApplicationHandler for App {
@@ -134,15 +138,21 @@ impl ApplicationHandler for App {
             .unwrap();
         window.set_cursor_visible(false);
 
-        let texture_pack = TexturePack::load();
+        let resource_pack = ResourcePack::load();
 
-        let mut renderer = pollster::block_on(render::init(Arc::clone(&window), &texture_pack));
+        let mut renderer = pollster::block_on(render::init(
+            Arc::clone(&window),
+            resource_pack.block_resources(),
+            resource_pack.texture_resources(),
+        ));
 
-        let cube_mesh = renderer.cube();
-        for (definition, entity_type) in ModelDefinition::iter().zip(EntityType::iter()) {
+        let cube_mesh = cube(&mut renderer);
+        // FIXME: override texture instead of new model?
+        for entity in EntityType::ALL {
+            let model: ModelDefinition = entity.into();
             renderer.insert_model(
-                definition.handle(),
-                definition.build(cube_mesh, texture_pack.get_textures(entity_type)),
+                ModelHandle::from(entity.handle()),
+                model.build(cube_mesh, entity.textures()),
             );
         }
 
@@ -175,7 +185,7 @@ impl ApplicationHandler for App {
             transport,
             local_player: None,
             world,
-            texture_pack,
+            resource_pack,
             chunk_state: Default::default(),
             entity_state: Default::default(),
             network_to_local: Default::default(),
@@ -186,7 +196,7 @@ impl ApplicationHandler for App {
             frame_timer: Default::default(),
             last_update: Instant::now(),
             particles: Default::default(),
-            time_of_day: TimeOfDay::new(0.5),
+            time_of_day: TimeOfDay::default(),
         });
     }
 
@@ -227,9 +237,6 @@ impl ApplicationHandler for App {
                 state.window.set_cursor_visible(true);
             }
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::CursorEntered { .. } if !event_consumed => {}
-            WindowEvent::CursorLeft { .. } if !event_consumed => {}
-            WindowEvent::CursorMoved { .. } if !event_consumed => {}
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -269,7 +276,9 @@ impl ApplicationHandler for App {
 
                 state.particles.tick(dt);
 
-                let (position, orientation, _) = state.process_inputs(dt);
+                let (position, orientation, _, properties) = state.process_inputs(dt);
+
+                state.process_gravity(dt);
 
                 let chunk_position = Vec2iChunk::from(position);
 
@@ -287,7 +296,7 @@ impl ApplicationHandler for App {
 
                 state.receive_chunk_frames(chunk_position);
 
-                state.render_frame(position, orientation, dt);
+                state.render_frame(position, &properties, orientation, dt);
 
                 state.transport.send_packets(&mut state.client).ok();
                 state.window.request_redraw();

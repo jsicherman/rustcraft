@@ -1,15 +1,22 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashSet, hash_map::Entry},
+    time::{Duration, Instant},
+};
 
-use block::{BlockId, REACH_DISTANCE, TexturePack};
+use bevy_ecs::query::Without;
 use chunk::{ChunkProvider, raycasting::raycast};
 use ecs::{
     BoxCollider, CollisionStatus, EntityModel, EntityOrientation, EntityPosition, EntityVelocity,
-    InteractionIntent, MovementIntent,
+    InteractionIntent, LocalPlayer, MovementIntent,
 };
-use model::ModelDefinition;
-use protocol::{CHANNEL_ENTITIES, ClientMessage, Packet};
+use protocol::{ServerBound, entity::ClientMessage};
 use render::Renderer;
 use renet::RenetClient;
+use resources::{
+    ResourcePack,
+    entity::{EntityProperties, EntityType},
+};
+use resources::{block::BlockId, entity::ModelDefinition};
 use spatial::{
     orientation::Orientation,
     vectors::{Vec3fGlobal, Vec3iGlobal},
@@ -24,10 +31,15 @@ use crate::{
 struct MouseInputContext<'a> {
     chunks: &'a mut ChunkCache,
     renderer: &'a mut Renderer,
-    textures: &'a TexturePack,
+    resource_pack: &'a ResourcePack,
     buttons: &'a HashSet<MouseButton>,
     client: &'a mut RenetClient,
     previous_state: &'a mut PreviousState,
+    orientation: &'a mut EntityOrientation,
+    model: &'a mut EntityModel,
+    base_properties: &'a EntityProperties,
+    bounding_box: &'a mut BoxCollider,
+    interact_intent: &'a mut InteractionIntent,
 }
 
 impl AppState {
@@ -36,10 +48,41 @@ impl AppState {
             .invalidate_chunk_meshes_around_block(&mut self.renderer, block_position);
     }
 
+    pub(crate) fn process_gravity(&mut self, dt: Duration) {
+        let mut query = self.world.query_filtered::<(
+            &mut EntityVelocity,
+            &mut EntityPosition,
+            &mut CollisionStatus,
+            &BoxCollider,
+        ), Without<LocalPlayer>>();
+
+        let null_intent = MovementIntent::default();
+        for (mut velocity, mut position, mut collision_status, collider) in
+            query.iter_mut(&mut self.world)
+        {
+            let new_velocity =
+                ecs::movement::apply_gravity(velocity.0, 0.0, &null_intent, *collision_status, dt);
+
+            let (final_position, final_velocity, new_status) = ecs::movement::apply_collision_aabb(
+                position.0,
+                *collider,
+                *collision_status,
+                new_velocity,
+                &self.chunk_state,
+                &self.resource_pack,
+                dt,
+            );
+
+            *velocity = EntityVelocity(final_velocity);
+            *position = EntityPosition(final_position);
+            *collision_status = new_status;
+        }
+    }
+
     pub(crate) fn process_inputs(
         &mut self,
         dt: Duration,
-    ) -> (Vec3fGlobal, Orientation, Vec3fGlobal) {
+    ) -> (Vec3fGlobal, Orientation, Vec3fGlobal, EntityProperties) {
         self.client.update(dt);
 
         match self.transport.update(dt, &mut self.client) {
@@ -50,7 +93,12 @@ impl AppState {
         }
 
         let Some((_, Some(player_entity))) = self.local_player else {
-            return (Default::default(), Default::default(), Default::default());
+            return (
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            );
         };
 
         let axis = |positive: KeyCode, negative: KeyCode| -> f32 {
@@ -87,24 +135,23 @@ impl AppState {
 
         let ray_origin = self.camera.get_eye_position(position.0);
 
+        let base_properties = ModelDefinition::from_handle(model.model_id).properties();
+
         let mut mouse_ctx = MouseInputContext {
             chunks: &mut self.chunk_state,
             renderer: &mut self.renderer,
-            textures: &self.texture_pack,
+            resource_pack: &self.resource_pack,
             buttons: &self.pressed_mouse_buttons,
             client: &mut self.client,
             previous_state: &mut self.previous_state,
+            orientation: &mut orientation,
+            model: &mut model,
+            base_properties: &base_properties,
+            bounding_box: &mut collider,
+            interact_intent: &mut mouse_intent,
         };
 
-        Self::process_mouse_inputs(
-            &mut mouse_ctx,
-            ray_origin,
-            &mut position,
-            &mut orientation,
-            &mut model,
-            &mut collider,
-            &mut mouse_intent,
-        );
+        Self::process_mouse_inputs(&mut mouse_ctx, ray_origin);
 
         let cursor_delta = self.camera.get_cursor_delta();
 
@@ -131,13 +178,13 @@ impl AppState {
 
         if self.client.is_connected() {
             if should_sync_intent {
-                let msg = ClientMessage::EntityMove(*intent).encode().unwrap();
-                self.client.send_message(CHANNEL_ENTITIES, msg);
+                let msg = ClientMessage::Move(*intent);
+                msg.transmit(&mut self.client);
             }
 
             if should_sync_orientation {
-                let msg = ClientMessage::EntityLook(*orientation).encode().unwrap();
-                self.client.send_message(CHANNEL_ENTITIES, msg);
+                let msg = ClientMessage::Look(*orientation);
+                msg.transmit(&mut self.client);
             }
         }
 
@@ -148,10 +195,22 @@ impl AppState {
             self.previous_state.orientation = Some(*orientation);
         }
 
-        let new_velocity = ecs::movement::apply_gravity(velocity.0, &intent, *collision_status, dt);
+        let new_velocity = ecs::movement::apply_gravity(
+            velocity.0,
+            base_properties.jump_velocity,
+            &intent,
+            *collision_status,
+            dt,
+        );
 
-        let (new_position, new_velocity) =
-            ecs::movement::apply_intent(position.0, orientation.0, &intent, new_velocity, dt);
+        let (new_position, new_velocity) = ecs::movement::apply_intent(
+            position.0,
+            orientation.0,
+            &intent,
+            base_properties.move_speed,
+            new_velocity,
+            dt,
+        );
 
         let (final_position, final_velocity, new_status) = ecs::movement::apply_collision_aabb(
             new_position,
@@ -159,7 +218,7 @@ impl AppState {
             *collision_status,
             new_velocity,
             &self.chunk_state,
-            &self.texture_pack,
+            &self.resource_pack,
             dt,
         );
 
@@ -182,30 +241,35 @@ impl AppState {
 
         self.camera.update(bobbing_speed, dt);
 
-        (position.0, orientation.0, final_velocity)
+        (position.0, orientation.0, final_velocity, base_properties)
     }
 
-    fn process_mouse_inputs(
-        context: &mut MouseInputContext<'_>,
-        ray_origin: Vec3fGlobal,
-        _position: &mut EntityPosition,
-        orientation: &mut EntityOrientation,
-        model: &mut EntityModel,
-        bounding_box: &mut BoxCollider,
-        interact_intent: &mut InteractionIntent,
-    ) {
+    fn process_mouse_inputs(context: &mut MouseInputContext<'_>, ray_origin: Vec3fGlobal) {
         let [left, right] = [MouseButton::Left, MouseButton::Right].map(|button| {
             let down = context.buttons.contains(&button);
-            let just_pressed = down && !context.previous_state.down.contains(&button);
-            if down {
-                context.previous_state.down.insert(button);
+
+            let just_pressed = if down {
+                match context.previous_state.down.entry(button) {
+                    Entry::Occupied(mut entry) => {
+                        if entry.get().elapsed() < Duration::from_millis(200) {
+                            false
+                        } else {
+                            entry.insert(Instant::now());
+                            true
+                        }
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(Instant::now());
+                        true
+                    }
+                }
             } else {
-                context.previous_state.down.remove(&button);
-            }
+                false
+            };
 
             match button {
-                MouseButton::Left => interact_intent.attack = just_pressed,
-                MouseButton::Right => interact_intent.interact = just_pressed,
+                MouseButton::Left => context.interact_intent.attack = just_pressed,
+                MouseButton::Right => context.interact_intent.interact = just_pressed,
                 _ => {}
             }
 
@@ -217,18 +281,18 @@ impl AppState {
         if left {
             let ray = raycast(
                 ray_origin,
-                orientation.0,
-                REACH_DISTANCE,
+                context.orientation.0,
+                context.base_properties.reach_distance,
                 context.chunks,
-                context.textures,
+                context.resource_pack,
             );
 
-            if let Some((block, normal)) = ray {
+            if let Some((block, _, normal)) = ray {
                 tracing::debug!(
                     "Client attacked block at {block:?} with normal {normal:?}, player position = {:?}, orientation = {:?}, eye height = {:?}",
                     ray_origin,
-                    orientation.0,
-                    model.eye_height,
+                    context.orientation.0,
+                    context.model.eye_height,
                 );
 
                 targeted_block = Some((block.position(), normal));
@@ -243,33 +307,31 @@ impl AppState {
 
         // temporary
         if right {
-            let definition = ModelDefinition::iter()
-                .nth((*model.model_id + 1) as usize)
-                .unwrap_or(ModelDefinition::Humanoid);
-            let entity_model = EntityModel::for_model(definition);
-            let collider = spatial::aabb::BoxCollider::for_model(definition);
+            let entity_type = EntityType::ALL
+                .get((*context.model.model_id + 1) as usize)
+                .copied()
+                .unwrap_or(EntityType::Human);
+            let model_definition = entity_type.model();
+            let entity_model = EntityModel::for_model(model_definition);
 
-            model.model_id = entity_model.model_id;
-            bounding_box.0 = collider;
+            let collider = spatial::aabb::BoxCollider::for_model(model_definition);
 
-            let msg = ClientMessage::EntityRemodel {
+            context.model.model_id = entity_model.model_id;
+            context.bounding_box.0 = collider;
+
+            let msg = ClientMessage::RemodelEntity {
                 model: entity_model,
                 bounding_box: BoxCollider(collider),
-            }
-            .encode()
-            .unwrap();
-
-            context.client.send_message(CHANNEL_ENTITIES, msg);
+            };
+            msg.transmit(context.client);
         }
 
         if left || right {
-            let msg = ClientMessage::BlockInteract {
-                intent: *interact_intent,
+            let msg = ClientMessage::InteractBlock {
+                intent: *context.interact_intent,
                 targeted_block,
-            }
-            .encode()
-            .unwrap();
-            context.client.send_message(CHANNEL_ENTITIES, msg);
+            };
+            msg.transmit(context.client);
         }
     }
 }

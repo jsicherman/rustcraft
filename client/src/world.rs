@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use block::BlockId;
 use chunk::{Block, Chunk, ChunkProvider, ChunkSection, ChunkStore, WireChunk};
 use render::Renderer;
+use resources::block::BlockId;
 use spatial::{
     CHUNK_SIZE,
     aabb::AxisAlignedBoundingBox,

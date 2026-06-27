@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use block::BlockId;
+use resources::block::{BlockId, BlockType};
 use serde::{Deserialize, Serialize};
 use spatial::{
     WORLD_HEIGHT,
@@ -24,6 +24,10 @@ pub struct Chunk {
     pub(crate) slices: [u64; SECTION_COUNT],
     pub(crate) entity_index: [u16; SECTION_COUNT],
     pub(crate) block_entities: Vec<BlockEntityData>,
+}
+
+impl Chunk {
+    pub const NUM_SLICES: usize = SECTION_COUNT;
 }
 
 pub struct ChunkScratch {
@@ -321,6 +325,10 @@ impl Chunk {
 
     pub fn section_hashes(&self) -> &[u64] {
         &self.slices
+    }
+
+    pub const fn num_sections(&self) -> usize {
+        self.slices.len()
     }
 
     /// Get the block at the given coordinate
@@ -786,9 +794,10 @@ impl<S: CoordSpace> Block<S> {
         &mut self.position
     }
 
-    pub fn aabb(&self) -> AxisAlignedBoundingBox<S> {
-        let min = Vec3f::from(self.position);
-        let max = min + Vec3f::from([1.0, 1.0, 1.0]);
+    pub fn aabb(&self, block_type: &BlockType) -> AxisAlignedBoundingBox<S> {
+        let offset = block_type.dimensions().offset().into();
+        let min = Vec3f::from(self.position) + offset;
+        let max = min + block_type.dimensions().size().into();
 
         AxisAlignedBoundingBox::new(min, max)
     }

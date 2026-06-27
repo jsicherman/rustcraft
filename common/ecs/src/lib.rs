@@ -1,13 +1,16 @@
+pub mod ai;
 pub mod movement;
 
 use bevy_ecs::{bundle::Bundle, component::Component};
-use model::ModelDefinition;
 use render::model::ModelHandle;
+use resources::entity::ModelDefinition;
 use serde::{Deserialize, Serialize};
 use spatial::{
     orientation::Orientation,
     vectors::{Global, Vec3f, Vec4f},
 };
+
+use crate::ai::NpcController;
 
 pub fn eye_position(base_position: Vec3f<Global>, eye_height: f32) -> Vec3f<Global> {
     base_position + [0.0, eye_height, 0.0].into()
@@ -46,7 +49,7 @@ pub struct EntityModel {
 impl EntityModel {
     pub fn for_model(model: ModelDefinition) -> Self {
         Self {
-            model_id: model.handle(),
+            model_id: ModelHandle::from(model as u32),
             eye_height: model.eye_height(),
             animation_state: AnimationState::Idle,
             transform: EntityTransform::default(),
@@ -91,8 +94,25 @@ pub struct EntityVelocity(pub Vec3f<Global>);
 pub type World = bevy_ecs::world::World;
 pub type Entity = bevy_ecs::entity::Entity;
 
+#[derive(Bundle)]
+pub struct NpcBundle {
+    pub entity: EntityBundle,
+    pub pathfinding: Pathfinding,
+    pub controller: NpcController,
+}
+
+impl NpcBundle {
+    pub fn new(entity: EntityBundle, controller: NpcController) -> Self {
+        Self {
+            entity,
+            pathfinding: Pathfinding,
+            controller,
+        }
+    }
+}
+
 #[derive(Bundle, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct SimulatedEntityBundle {
+pub struct EntityBundle {
     pub position: EntityPosition,
     pub orientation: EntityOrientation,
     pub velocity: EntityVelocity,
@@ -103,7 +123,7 @@ pub struct SimulatedEntityBundle {
     pub collision_status: CollisionStatus,
 }
 
-impl SimulatedEntityBundle {
+impl EntityBundle {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         position: EntityPosition,
@@ -129,6 +149,7 @@ impl SimulatedEntityBundle {
 }
 
 #[derive(Component)]
-pub struct RemoteControlled;
+pub struct Pathfinding;
+
 #[derive(Component)]
-pub struct AiControlled;
+pub struct LocalPlayer;

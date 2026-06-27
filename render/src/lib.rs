@@ -1,18 +1,24 @@
+mod block;
 mod builder;
-mod debug;
+mod camera;
+mod lighting;
+mod math;
 mod mesher;
 pub mod model;
 mod overlay;
 mod render;
+mod shader;
 mod texture;
 
 #[derive(Debug, Clone, Copy)]
 pub struct OverlayParticle {
-	pub position: [f32; 3],
-	pub radius: f32,
-	pub color: [u8; 4],
+    pub position: [f32; 3],
+    pub radius: f32,
+    pub color: [u8; 4],
 }
 
+pub use block::cube;
 pub use builder::{MeshBuildResult, VoxelMesher};
-pub use debug::DebugOverlayData;
-pub use render::{MeshGpu as Mesh, Renderer, init};
+pub use mesher::MeshGpu as Mesh;
+pub use overlay::DebugOverlayData;
+pub use render::{Renderer, init};
