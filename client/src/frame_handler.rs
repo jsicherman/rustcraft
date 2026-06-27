@@ -22,6 +22,7 @@ use crate::{
 };
 
 impl AppState {
+    // FIXME: put with spatial
     fn cull_sphere(position: Vec3fGlobal, collider: BoxCollider) -> CullSphere {
         let half_height = collider.0.height() * 0.5;
         let half_width = collider.0.half_width();

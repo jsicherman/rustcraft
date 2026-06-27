@@ -44,10 +44,8 @@ struct MouseInputContext<'a> {
 }
 
 impl AppState {
-    #[allow(clippy::too_many_arguments)]
     fn resolve_remote_collision_snap(
         previous_position: Vec3fGlobal,
-        predicted_position: Vec3fGlobal,
         velocity: Vec3fGlobal,
         collider: BoxCollider,
         previous_status: CollisionStatus,
@@ -58,8 +56,9 @@ impl AppState {
         const SNAP_EPSILON: f32 = 1e-3;
         const MAX_PASSES: usize = 3;
 
-        let mut position = predicted_position;
-        let mut velocity = velocity;
+        // Remote entities only simulate vertical motion locally.
+        let mut velocity = Vec3fGlobal::new(0.0, velocity.y(), 0.0);
+        let mut position = previous_position + velocity * dt.as_secs_f32();
         let mut status = previous_status;
 
         let swept = collider.0.aabb_swept(previous_position, velocity, dt);
@@ -82,9 +81,11 @@ impl AppState {
                     continue;
                 }
 
-                let dx = position.x() - previous_position.x();
                 let dy = position.y() - previous_position.y();
-                let dz = position.z() - previous_position.z();
+                let entity_center_x = (entity_aabb.min().x() + entity_aabb.max().x()) * 0.5;
+                let entity_center_z = (entity_aabb.min().z() + entity_aabb.max().z()) * 0.5;
+                let block_center_x = (block_aabb.min().x() + block_aabb.max().x()) * 0.5;
+                let block_center_z = (block_aabb.min().z() + block_aabb.max().z()) * 0.5;
 
                 let (left_x, right_x) = (
                     block_aabb.max().x() - entity_aabb.min().x(),
@@ -104,12 +105,11 @@ impl AppState {
                 let overlap_z = left_z.min(right_z);
 
                 if overlap_x <= overlap_y && overlap_x <= overlap_z {
-                    if dx >= 0.0 {
+                    if entity_center_x <= block_center_x {
                         position[0] = block_aabb.min().x() - collider.0.half_width() - SNAP_EPSILON;
                     } else {
                         position[0] = block_aabb.max().x() + collider.0.half_width() + SNAP_EPSILON;
                     }
-                    velocity[0] = 0.0;
                 } else if overlap_y <= overlap_x && overlap_y <= overlap_z {
                     if dy >= 0.0 {
                         position[1] = block_aabb.min().y() - collider.0.height() - SNAP_EPSILON;
@@ -119,12 +119,11 @@ impl AppState {
                     }
                     velocity[1] = 0.0;
                 } else {
-                    if dz >= 0.0 {
+                    if entity_center_z <= block_center_z {
                         position[2] = block_aabb.min().z() - collider.0.half_width() - SNAP_EPSILON;
                     } else {
                         position[2] = block_aabb.max().z() + collider.0.half_width() + SNAP_EPSILON;
                     }
-                    velocity[2] = 0.0;
                 }
 
                 resolved = true;
@@ -160,15 +159,12 @@ impl AppState {
             &BoxCollider,
         ), Without<LocalPlayer>>();
 
-        let dt_secs = dt.as_secs_f32();
         for (mut velocity, mut position, mut collision_status, collider) in query.iter_mut(world) {
             let previous_position = position.0;
-            let predicted_position = previous_position + velocity.0 * dt_secs;
 
             let (resolved_position, resolved_velocity, resolved_status) =
                 Self::resolve_remote_collision_snap(
                     previous_position,
-                    predicted_position,
                     velocity.0,
                     *collider,
                     *collision_status,

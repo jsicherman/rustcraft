@@ -523,6 +523,7 @@ pub fn apply_intent_all(
     dt: Duration,
 ) {
     const BROADCAST_POS_TOLERANCE_SQ: f32 = 1e-2 * 1e-2;
+    const BROADCAST_VEL_TOLERANCE_SQ: f32 = 1e-1 * 1e-1;
 
     stack.clear();
 
@@ -579,8 +580,10 @@ pub fn apply_intent_all(
         );
 
         // FIXME: would be nice to quantize on broadcast ticks
-        let broadcast_worthy =
-            (final_position - position.0).length_sq() > BROADCAST_POS_TOLERANCE_SQ;
+        let broadcast_worthy = (final_position - position.0).length_sq()
+            > BROADCAST_POS_TOLERANCE_SQ
+            || (final_velocity - velocity.0).length_sq() > BROADCAST_VEL_TOLERANCE_SQ
+            || *collision_status != new_status;
 
         *collision_status = new_status;
         *position = EntityPosition(final_position);
